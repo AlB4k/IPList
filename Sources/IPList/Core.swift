@@ -92,6 +92,9 @@ struct AppState: Codable {
     var selectionInitialized = false
     var selectAllByDefault = true
     var lastChecks: [ExportMode: Date] = [:]
+    var dockIconVisible = true
+    var menuBarIconVisible = true
+    var hasUnseenChanges = false
 
     var export: Set<String> {
         let automaticAddresses: Set<String>
@@ -163,6 +166,7 @@ struct AppState: Codable {
         case services, selected, manual, manualEnabled, changes, lastCheck, intervalHours, automatic
         case sourceURL, categoryBaseURL, liteSourceURL, fullSourceURL, mode, liteAddresses, fullAddresses
         case profiles, selectionInitialized, selectAllByDefault, lastChecks
+        case dockIconVisible, menuBarIconVisible, hasUnseenChanges
     }
 
     init() {}
@@ -188,6 +192,9 @@ struct AppState: Codable {
         let hadSelectionPolicy = c.contains(.selectAllByDefault)
         selectAllByDefault = try c.decodeIfPresent(Bool.self, forKey: .selectAllByDefault) ?? true
         lastChecks = try c.decodeIfPresent([ExportMode: Date].self, forKey: .lastChecks) ?? [:]
+        dockIconVisible = try c.decodeIfPresent(Bool.self, forKey: .dockIconVisible) ?? true
+        menuBarIconVisible = try c.decodeIfPresent(Bool.self, forKey: .menuBarIconVisible) ?? true
+        hasUnseenChanges = try c.decodeIfPresent(Bool.self, forKey: .hasUnseenChanges) ?? false
         if c.contains(.selectionInitialized) {
             selectionInitialized = try c.decode(Bool.self, forKey: .selectionInitialized)
         } else {

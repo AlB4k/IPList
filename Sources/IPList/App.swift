@@ -33,6 +33,7 @@ import UniformTypeIdentifiers
             }
         } catch { self.error = "Не удалось прочитать сохранённые данные: \(error.localizedDescription)" }
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in Task { @MainActor in self?.checkSchedule() } }
+        applyIconVisibility()
         Task { checkSchedule() }
     }
     func checkSchedule() {
@@ -100,6 +101,25 @@ import UniformTypeIdentifiers
     func deleteProfile(_ id: UUID) {
         state.profiles.removeAll { $0.id == id }; if selectedProfileID == id { selectedProfileID = nil }; persist()
     }
+    func markChangesSeen() {
+        guard state.hasUnseenChanges else { return }
+        state.hasUnseenChanges = false; persist()
+    }
+    func setDockIconVisible(_ visible: Bool) {
+        guard visible != state.dockIconVisible else { return }
+        state.dockIconVisible = visible
+        if !visible && !state.menuBarIconVisible { state.menuBarIconVisible = true }
+        applyIconVisibility(); persist()
+    }
+    func setMenuBarIconVisible(_ visible: Bool) {
+        guard visible != state.menuBarIconVisible else { return }
+        state.menuBarIconVisible = visible
+        if !visible && !state.dockIconVisible { state.dockIconVisible = true }
+        applyIconVisibility(); persist()
+    }
+    func applyIconVisibility() {
+        NSApp.setActivationPolicy(state.dockIconVisible ? .regular : .accessory)
+    }
     func addManual(_ text: String) {
         let values = text.split(whereSeparator: { $0.isWhitespace || $0 == "," || $0 == ";" }).map(String.init)
         guard !values.isEmpty else { return }
@@ -147,6 +167,7 @@ import UniformTypeIdentifiers
                 if !added.isEmpty || !removed.isEmpty {
                     state.changes.insert(Change(added: added, removed: removed, reason: "Источник: \(mode.title)"), at: 0)
                     state.changes = Array(state.changes.prefix(100))
+                    state.hasUnseenChanges = true
                 }
                 if !added.isEmpty || !removed.isEmpty || before != state.export {
                     let content = UNMutableNotificationContent(); content.title = "IPList: список изменился"
@@ -183,13 +204,17 @@ import UniformTypeIdentifiers
     @StateObject private var store = Store()
     var body: some Scene {
         WindowGroup("IPList • Мимо VPN") { ContentView().environmentObject(store).frame(minWidth: 1020, minHeight: 700) }
-        MenuBarExtra("IPList", systemImage: "arrow.triangle.branch") {
+            .windowStyle(.hiddenTitleBar)
+        MenuBarExtra(isInserted: Binding(get: { store.state.menuBarIconVisible }, set: { store.setMenuBarIconVisible($0) })) {
             Text("В выгрузке: \(store.state.export.count) IP")
+            if store.state.hasUnseenChanges { Text("Есть новые изменения адресов").foregroundStyle(.orange) }
             Button("Открыть IPList") { NSApp.activate(ignoringOtherApps: true); NSApp.windows.first(where: { $0.canBecomeMain })?.makeKeyAndOrderFront(nil) }
             Button("Проверить сейчас") { Task { await store.refresh() } }.disabled(store.busy || store.testingSources)
             Button("Экспортировать…") { store.exportFile() }.disabled(!store.exportReady)
             Divider()
             Button("Завершить IPList") { NSApp.terminate(nil) }
+        } label: {
+            Label("IPList", systemImage: store.state.hasUnseenChanges ? "bell.badge.fill" : "arrow.triangle.branch")
         }
     }
 }
@@ -208,15 +233,48 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @EnvironmentObject var store: Store
     @StateObject private var ui = ViewState()
+    private static let appIcon: NSImage = NSApplication.shared.applicationIconImage
 
     private let pages = ["Каталог", "Мои IP", "Изменения", "Выгрузка", "Настройки"]
+    private let pageIcons: [String: String] = [
+        "Каталог": "list.bullet.rectangle.portrait",
+        "Мои IP": "network",
+        "Изменения": "clock.arrow.circlepath",
+        "Выгрузка": "square.and.arrow.up",
+        "Настройки": "gearshape"
+    ]
+    private let categoryIcons: [String: String] = [
+        "Банки и финансы": "banknote",
+        "Безопасность": "lock.shield",
+        "Государство": "building.columns",
+        "Карты": "map",
+        "Магазины": "cart",
+        "Маркетплейсы": "bag",
+        "Медицина": "cross.case",
+        "Поиск и технологии": "magnifyingglass",
+        "Почта": "envelope",
+        "Прочие ресурсы": "square.grid.2x2",
+        "Развлечения": "gamecontroller",
+        "СМИ": "newspaper",
+        "Социальные сети": "person.2",
+        "Транспорт и путешествия": "airplane"
+    ]
+    private func pageIcon(_ page: String) -> String { pageIcons[page] ?? "circle" }
+    private func categoryIcon(_ category: String) -> String { categoryIcons[category] ?? "folder" }
+    private var scheduleSummary: String {
+        store.state.automatic ? "Обновление настроено на: каждые \(store.state.intervalHours) ч" : "Обновление настроено на: вручную"
+    }
 
     var body: some View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 16) {
-                Label("IPList", systemImage: "arrow.triangle.branch").font(.largeTitle.bold())
-                Text("Ваш маршрут мимо VPN").foregroundStyle(.secondary)
-                List(pages, id: \.self, selection: $ui.page) { Text($0).padding(.vertical, 7) }
+                VStack(spacing: 10) {
+                    Image(nsImage: Self.appIcon)
+                        .resizable().frame(width: 72, height: 72)
+                    Text("IPList").font(.title.bold()).foregroundStyle(Color.accentColor)
+                }.frame(maxWidth: .infinity)
+                Text("Ваш маршрут мимо VPN").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .center)
+                List(pages, id: \.self, selection: $ui.page) { Label($0, systemImage: pageIcon($0)).padding(.vertical, 7) }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("\(store.state.export.count)").font(.system(size: 36, weight: .semibold, design: .rounded))
                     Text("IP и диапазонов в выгрузке").foregroundStyle(.secondary)
@@ -226,7 +284,7 @@ struct ContentView: View {
         } detail: {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    VStack(alignment: .leading) { Text(ui.page).font(.largeTitle.bold()); Text(subtitle).foregroundStyle(.secondary) }
+                    VStack(alignment: .leading) { Label(ui.page, systemImage: pageIcon(ui.page)).font(.largeTitle.bold()); Text(subtitle).foregroundStyle(.secondary) }
                     Spacer()
                     if store.busy { ProgressView().controlSize(.small) }
                     Button { Task { await store.refresh() } } label: { Label("Проверить сейчас", systemImage: "arrow.clockwise") }.disabled(store.busy || store.testingSources)
@@ -248,6 +306,19 @@ struct ContentView: View {
             Button("OK") { store.error = nil }
         } message: { Text(store.error ?? "") }
         .sheet(isPresented: $ui.showImport) { importSheet }
+        .onChange(of: ui.page) { page in if page == "Изменения" { store.markChangesSeen() } }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                HStack(spacing: 6) {
+                    Image(nsImage: Self.appIcon)
+                        .resizable().frame(width: 20, height: 20)
+                    HStack(spacing: 0) {
+                        Text("IPList • Мимо VPN • ")
+                        Text(scheduleSummary).foregroundStyle(Color.accentColor)
+                    }
+                }
+            }
+        }
     }
 
     private var subtitle: String {
@@ -303,7 +374,7 @@ struct ContentView: View {
 
     private func categoryHeader(_ category: String, all: [Service]) -> some View {
         HStack(spacing: 8) {
-            Toggle(isOn: Binding(get: { all.allSatisfy { store.state.selected.contains($0.id) } }, set: { store.select(all.map(\.id), enabled: $0) })) { Text(category).font(.headline) }.toggleStyle(.checkbox).disabled(store.busy)
+            Toggle(isOn: Binding(get: { all.allSatisfy { store.state.selected.contains($0.id) } }, set: { store.select(all.map(\.id), enabled: $0) })) { Label(category, systemImage: categoryIcon(category)).font(.headline) }.toggleStyle(.checkbox).disabled(store.busy)
             Spacer()
             Text("\(all.filter { store.state.selected.contains($0.id) }.count)/\(all.count)").font(.caption).foregroundStyle(.secondary)
             Button("Все") { store.select(all.map(\.id), enabled: true) }.buttonStyle(.borderless).font(.caption).disabled(store.busy)
@@ -399,6 +470,11 @@ struct ContentView: View {
                 Text("Выбор категорий применяется только к точечному обходу. Lite предназначен для Android/iOS, полный список — для десктопа.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Профили выбора") { profilesView }
+            Section("Значок приложения") {
+                Toggle("Показывать в Dock", isOn: Binding(get: { store.state.dockIconVisible }, set: { store.setDockIconVisible($0) }))
+                Toggle("Показывать значок в строке меню", isOn: Binding(get: { store.state.menuBarIconVisible }, set: { store.setMenuBarIconVisible($0) }))
+                Text("Значок в строке меню сигнализирует (значок колокольчика), если после обновления появились или удалились адреса. Нельзя скрыть оба значка одновременно — иначе к IPList будет не добраться.").font(.caption).foregroundStyle(.secondary)
+            }
             Section("Расписание") {
                 Toggle("Обновлять автоматически", isOn: $store.state.automatic).onChange(of: store.state.automatic) { _ in store.persist() }
                 Stepper("Каждые \(store.state.intervalHours) ч.", value: $store.state.intervalHours, in: 1...720).onChange(of: store.state.intervalHours) { _ in store.persist() }
