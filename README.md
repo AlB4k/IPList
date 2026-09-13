@@ -60,7 +60,9 @@
 
 ### Установка и запуск
 
-Собрать локальный бандл приложения:
+**Готовый DMG:** [скачать IPList-1.1.0.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.1.0.dmg) со страницы [Releases](https://github.com/AlB4k/IPList/releases/latest). DMG содержит `IPList.app`, ярлык на `/Applications` и инструкцию по первому запуску.
+
+Либо собрать локальный бандл приложения из исходников:
 
 ```sh
 ./scripts/build-app.sh
@@ -71,7 +73,7 @@ open dist/IPList.app
 
 Для повседневного использования перенесите `IPList.app` в `/Applications` и добавьте в «Системные настройки → Основные → Элементы входа», если расписание должно продолжать работать после перезагрузки.
 
-**Установка из DMG на «чистом» Mac.** Если вы получили `IPList-<версия>.dmg` (собирается через `./scripts/build-app.sh`, DMG — вручную через `hdiutil`, готового скрипта в репозитории нет), при первом запуске macOS Gatekeeper покажет предупреждение «не удаётся проверить разработчика» — это ожидаемо для ad-hoc подписи без Developer ID. Правой кнопкой по IPList.app → «Открыть» → подтвердить во всплывающем окне, либо разрешить в «Настройки → Конфиденциальность и безопасность». Делать это нужно только один раз.
+**Установка из DMG на «чистом» Mac.** При первом запуске macOS Gatekeeper покажет предупреждение «не удаётся проверить разработчика» — это ожидаемо для ad-hoc подписи без Developer ID. Правой кнопкой по IPList.app → «Открыть» → подтвердить во всплывающем окне, либо разрешить в «Настройки → Конфиденциальность и безопасность». Делать это нужно только один раз.
 
 ### Как пользоваться
 
@@ -205,7 +207,9 @@ Manual addresses can be added in the "My IP" category and optionally included in
 
 ### Install And Run
 
-Build a local app bundle:
+**Ready-made DMG:** [download IPList-1.1.0.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.1.0.dmg) from the [Releases](https://github.com/AlB4k/IPList/releases/latest) page. The DMG contains `IPList.app`, an `/Applications` shortcut, and a first-launch note.
+
+Or build a local app bundle from source:
 
 ```sh
 ./scripts/build-app.sh
@@ -216,7 +220,7 @@ The produced app is ad-hoc signed and intended for local use on this Mac. It is 
 
 For regular use, move `IPList.app` to `/Applications` and add it to "System Settings -> General -> Login Items" if scheduled checks should resume after reboot.
 
-**Installing a DMG on a clean Mac.** If you were given an `IPList-<version>.dmg` (the app itself is built with `./scripts/build-app.sh`; packaging it into a DMG is a manual `hdiutil` step, there is no script for it in this repository yet), macOS Gatekeeper will warn that the developer cannot be verified on first launch — expected for an ad-hoc signature without a Developer ID. Right-click IPList.app -> "Open" -> confirm in the dialog, or allow it under "System Settings -> Privacy & Security". This is only needed once.
+**Installing a DMG on a clean Mac.** macOS Gatekeeper will warn that the developer cannot be verified on first launch — expected for an ad-hoc signature without a Developer ID. Right-click IPList.app -> "Open" -> confirm in the dialog, or allow it under "System Settings -> Privacy & Security". This is only needed once.
 
 ### Using The App
 
