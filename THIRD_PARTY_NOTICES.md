@@ -1,0 +1,31 @@
+# Third-Party Notices
+
+IPList does not vendor third-party list files or source code in this repository. The app contains URLs and parsers that let a user download compatible public data sources at runtime.
+
+## lib4u/amnezia-tunneling-ru
+
+Repository: https://github.com/lib4u/amnezia-tunneling-ru
+
+IPList uses this repository as the default runtime source for Amnezia-compatible JSON lists:
+
+- `amnezia.json`
+- `amnezia-ip-lite.json`
+- `amnezia-ip.json`
+
+No files or scripts from `lib4u/amnezia-tunneling-ru` are committed into this repository.
+
+At the time this project was prepared for publication, the upstream repository did not expose a `LICENSE` file in its GitHub file list. Because of that, do not copy, vendor, mirror, or redistribute its generated list files inside this repository or binary releases unless the upstream license or maintainer permission is clarified.
+
+## v2fly/domain-list-community
+
+Repository: https://github.com/v2fly/domain-list-community
+
+IPList uses this repository as the default runtime source for category/domain metadata. The upstream project is published with an MIT license according to its GitHub repository metadata.
+
+No files from `v2fly/domain-list-community` are committed into this repository.
+
+## AmneziaVPN
+
+Website: https://amnezia.org/
+
+IPList exports JSON intended to be imported into AmneziaVPN split tunneling settings. IPList is an independent tool and is not affiliated with AmneziaVPN.
