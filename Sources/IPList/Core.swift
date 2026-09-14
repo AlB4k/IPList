@@ -289,7 +289,10 @@ enum CatalogError: LocalizedError {
         case .invalidJSON(let url, let reason): return "Некорректные данные источника \(url): \(reason)"
         case .invalidCategory(let url): return "Источник категорий не содержит доменов: \(url)"
         case .allCandidatesFailed(let failures):
-            return "Не удалось обновить данные. " + failures.map { "\($0.0): \($0.1)" }.joined(separator: "\n")
+            let base = "Не удалось обновить данные. " + failures.map { "\($0.0): \($0.1)" }.joined(separator: "\n")
+            let allTimedOut = !failures.isEmpty && failures.allSatisfy { $0.1.localizedCaseInsensitiveContains("не ответил вовремя") }
+            guard allTimedOut else { return base }
+            return base + "\n\nВсе источники (включая резервный) зависли одинаково — это похоже на блокировку или троттлинг сети провайдером, а не на медленный сервер. Попробуйте включить VPN или другую сеть и повторить проверку."
         }
     }
 }

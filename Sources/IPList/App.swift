@@ -207,14 +207,40 @@ import UniformTypeIdentifiers
             .windowStyle(.hiddenTitleBar)
         MenuBarExtra(isInserted: Binding(get: { store.state.menuBarIconVisible }, set: { store.setMenuBarIconVisible($0) })) {
             Text("В выгрузке: \(store.state.export.count) IP")
+            Text(lastUpdateText).foregroundStyle(.secondary)
             if store.state.hasUnseenChanges { Text("Есть новые изменения адресов").foregroundStyle(.orange) }
+            Divider()
             Button("Открыть IPList") { NSApp.activate(ignoringOtherApps: true); NSApp.windows.first(where: { $0.canBecomeMain })?.makeKeyAndOrderFront(nil) }
             Button("Проверить сейчас") { Task { await store.refresh() } }.disabled(store.busy || store.testingSources)
             Button("Экспортировать…") { store.exportFile() }.disabled(!store.exportReady)
             Divider()
+            Button(store.testingSources ? "Проверяю источники…" : "Проверить источники") { Task { await store.testSources() } }.disabled(store.busy || store.testingSources)
+            sourceStatusRows
+            Divider()
             Button("Завершить IPList") { NSApp.terminate(nil) }
         } label: {
             Label("IPList", systemImage: store.state.hasUnseenChanges ? "bell.badge.fill" : "arrow.triangle.branch")
+        }
+    }
+
+    private var lastUpdateText: String {
+        guard let date = store.state.lastCheck(for: store.state.mode) else { return "Ещё не обновлялось" }
+        return "Обновлено: " + date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    @ViewBuilder private var sourceStatusRows: some View {
+        if store.sourceChecks.isEmpty {
+            HStack(spacing: 6) {
+                Circle().fill(Color.gray).frame(width: 8, height: 8)
+                Text("Источники ещё не проверялись")
+            }
+        } else {
+            ForEach(store.sourceChecks) { check in
+                HStack(spacing: 6) {
+                    Circle().fill(check.success ? Color.green : Color.red).frame(width: 8, height: 8)
+                    Text(check.name)
+                }
+            }
         }
     }
 }
