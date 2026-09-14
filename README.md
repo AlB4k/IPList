@@ -60,7 +60,9 @@
 
 ### Установка и запуск
 
-**Готовый DMG:** [скачать IPList-1.1.0.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.1.0.dmg) со страницы [Releases](https://github.com/AlB4k/IPList/releases/latest). DMG содержит `IPList.app`, ярлык на `/Applications` и инструкцию по первому запуску.
+**Готовый DMG:** [скачать IPList-1.2.0.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.2.0.dmg) со страницы [Releases](https://github.com/AlB4k/IPList/releases/latest). DMG содержит `IPList.app`, ярлык на `/Applications` и инструкцию по первому запуску.
+
+Автообновления в приложении нет: если уже установлена более ранняя версия, для перехода на новую скачайте свежий DMG и перетащите `IPList.app` в `/Applications` поверх старого — настройки и списки в `~/Library/Application Support/IPList/` сохранятся.
 
 Либо собрать локальный бандл приложения из исходников:
 
@@ -207,7 +209,9 @@ Manual addresses can be added in the "My IP" category and optionally included in
 
 ### Install And Run
 
-**Ready-made DMG:** [download IPList-1.1.0.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.1.0.dmg) from the [Releases](https://github.com/AlB4k/IPList/releases/latest) page. The DMG contains `IPList.app`, an `/Applications` shortcut, and a first-launch note.
+**Ready-made DMG:** [download IPList-1.2.0.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.2.0.dmg) from the [Releases](https://github.com/AlB4k/IPList/releases/latest) page. The DMG contains `IPList.app`, an `/Applications` shortcut, and a first-launch note.
+
+There is no in-app auto-update: if an earlier version is already installed, download the new DMG and drag `IPList.app` over the old one in `/Applications` — settings and lists under `~/Library/Application Support/IPList/` are preserved.
 
 Or build a local app bundle from source:
 
