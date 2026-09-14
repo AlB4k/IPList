@@ -310,8 +310,18 @@ actor CatalogLoader {
     private let timeout: TimeInterval
     private let retryCount: Int
 
-    init(session: URLSession = .shared, timeout: TimeInterval = 18, retryCount: Int = 1) {
-        self.session = session
+    init(session: URLSession? = nil, timeout: TimeInterval = 18, retryCount: Int = 1) {
+        if let session {
+            self.session = session
+        } else {
+            // .shared has no hard ceiling on total transfer time (timeoutIntervalForResource
+            // defaults to 7 days), so a connection that trickles a few bytes now and then
+            // never trips request.timeoutInterval and can hang far longer than `timeout`.
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = timeout
+            config.timeoutIntervalForResource = timeout
+            self.session = URLSession(configuration: config)
+        }
         self.timeout = timeout
         self.retryCount = max(0, retryCount)
     }
