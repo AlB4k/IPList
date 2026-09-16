@@ -149,13 +149,13 @@ struct AppState: Codable {
     mutating func saveProfile(name: String) {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
-        if let index = profiles.firstIndex(where: { $0.name.localizedCaseInsensitiveCompare(clean) == .orderedSame }) {
+        if let index = profiles.firstIndex(where: { $0.name.caseInsensitiveCompare(clean) == .orderedSame }) {
             let id = profiles[index].id
             profiles[index] = SelectionProfile(id: id, name: clean, selected: selected, mode: mode, manualEnabled: manualEnabled, selectAllByDefault: selectAllByDefault)
         } else {
             profiles.append(SelectionProfile(name: clean, selected: selected, mode: mode, manualEnabled: manualEnabled, selectAllByDefault: selectAllByDefault))
         }
-        profiles.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        profiles.sort { $0.name.caseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     @discardableResult mutating func applyProfile(id: UUID) -> Bool {
@@ -172,16 +172,16 @@ struct AppState: Codable {
 
     @discardableResult mutating func addGroup(name: String) -> Bool {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty, !manualGroups.contains(where: { $0.name.localizedCaseInsensitiveCompare(clean) == .orderedSame }) else { return false }
+        guard !clean.isEmpty, !manualGroups.contains(where: { $0.name.caseInsensitiveCompare(clean) == .orderedSame }) else { return false }
         manualGroups.append(IPGroup(name: clean))
-        manualGroups.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        manualGroups.sort { $0.name.caseInsensitiveCompare($1.name) == .orderedAscending }
         return true
     }
     mutating func renameGroup(id: UUID, name: String) {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty, let index = manualGroups.firstIndex(where: { $0.id == id }) else { return }
         manualGroups[index].name = clean
-        manualGroups.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        manualGroups.sort { $0.name.caseInsensitiveCompare($1.name) == .orderedAscending }
     }
     mutating func deleteGroup(id: UUID) {
         manualGroups.removeAll { $0.id == id }

@@ -52,6 +52,7 @@
 - Дерево категорий (свёрнуто по умолчанию), быстрый выбор всех/ничего, поиск, выбор отдельных сервисов — у каждой категории своя иконка.
 - Именованные профили: сохраняют выбранные сервисы, режим экспорта и флаг «Мои IP».
 - Импорт уже существующего экспорта Amnezia для ручного выбора адресов.
+- Копирование адресов «Мои IP» в буфер обмена — все сразу или по одному.
 - История изменений — какие адреса добавились/пропали между успешными проверками.
 - Автоматический локальный экспорт в `~/Library/Application Support/IPList/amnezia-direct.json`.
 - Присутствие в строке меню, чтобы расписание продолжало работать при закрытом окне.
@@ -60,7 +61,7 @@
 
 ### Установка и запуск
 
-**Готовый DMG:** [скачать IPList-1.3.0.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.3.0.dmg) со страницы [Releases](https://github.com/AlB4k/IPList/releases/latest). DMG содержит `IPList.app`, ярлык на `/Applications` и инструкцию по первому запуску.
+**Готовый DMG:** [скачать IPList-1.3.1.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.3.1.dmg) со страницы [Releases](https://github.com/AlB4k/IPList/releases/latest). DMG содержит `IPList.app`, ярлык на `/Applications` и инструкцию по первому запуску.
 
 Автообновления в приложении нет: если уже установлена более ранняя версия, для перехода на новую скачайте свежий DMG и перетащите `IPList.app` в `/Applications` поверх старого — настройки и списки в `~/Library/Application Support/IPList/` сохранятся.
 
@@ -201,6 +202,7 @@ Manual addresses can be added in the "My IP" category and optionally included in
 - Category tree with collapsed groups by default, global select-all, search, per-service selection, and a distinct icon per category.
 - Named profiles for saving and restoring selected services, export mode, and the "My IP" inclusion flag.
 - Import of an existing Amnezia JSON export for manual address selection.
+- Copy "My IP" addresses to the clipboard — all at once or one at a time.
 - Change history for added and removed addresses between successful checks.
 - Automatic local export to `~/Library/Application Support/IPList/amnezia-direct.json`.
 - Menu bar presence, so scheduled checks can continue while the main window is closed.
@@ -209,7 +211,7 @@ Manual addresses can be added in the "My IP" category and optionally included in
 
 ### Install And Run
 
-**Ready-made DMG:** [download IPList-1.3.0.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.3.0.dmg) from the [Releases](https://github.com/AlB4k/IPList/releases/latest) page. The DMG contains `IPList.app`, an `/Applications` shortcut, and a first-launch note.
+**Ready-made DMG:** [download IPList-1.3.1.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.3.1.dmg) from the [Releases](https://github.com/AlB4k/IPList/releases/latest) page. The DMG contains `IPList.app`, an `/Applications` shortcut, and a first-launch note.
 
 There is no in-app auto-update: if an earlier version is already installed, download the new DMG and drag `IPList.app` over the old one in `/Applications` — settings and lists under `~/Library/Application Support/IPList/` are preserved.
 

@@ -221,6 +221,20 @@ import UniformTypeIdentifiers
             return result
         } catch { self.error = error.localizedDescription; return [] }
     }
+    private func copyToPasteboard(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+    func copyManualAddresses() {
+        guard !state.manual.isEmpty else { return }
+        copyToPasteboard(state.manual.map(\.address).sorted().joined(separator: "\n"))
+        message = "Скопировано адресов «Мои IP»: \(state.manual.count)."
+    }
+    func copyManualAddress(_ entry: ManualEntry) {
+        copyToPasteboard(entry.address)
+        message = "Скопирован адрес: \(entry.address)."
+    }
 }
 
 @main struct IPListApp: App {
@@ -481,6 +495,8 @@ struct ContentView: View {
             HStack {
                 Button("Добавить") { store.addManual(ui.manual, groupID: ui.manualGroupID); if store.error == nil { ui.manual = "" } }
                 Button("Импорт из Amnezia…") { ui.importRows = store.importFile(); ui.importSelection = []; ui.showImport = !ui.importRows.isEmpty }
+                Spacer()
+                Button { store.copyManualAddresses() } label: { Label("Копировать все", systemImage: "doc.on.doc") }.disabled(store.state.manual.isEmpty)
             }
             Text("IPv4 / CIDR через пробел или запятую. Адрес подсети нормализуется по маске. Группа применяется ко всем адресам, добавленным за раз.").font(.caption).foregroundStyle(.secondary)
 
@@ -529,6 +545,7 @@ struct ContentView: View {
                 Text("Без группы").tag(UUID?.none)
                 ForEach(store.state.manualGroups) { group in Text(group.name).tag(Optional(group.id)) }
             }.labelsHidden().frame(width: 160)
+            Button { store.copyManualAddress(entry) } label: { Image(systemName: "doc.on.doc") }.buttonStyle(.borderless)
             Button(role: .destructive) { store.removeManual(id: entry.id) } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
         }
     }

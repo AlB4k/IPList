@@ -101,7 +101,10 @@ func XCTAssertGreaterThan(_ a: Int, _ b: Int) { precondition(a > b) }
         XCTAssertTrue(state.addGroup(name: "Сайты"))
         XCTAssertTrue(!state.addGroup(name: "  Сайты  ")) // duplicate name (case/whitespace-insensitive) is rejected
         XCTAssertTrue(!state.addGroup(name: "   ")) // empty name is rejected
-        XCTAssertEqual(state.manualGroups.map(\.name), ["Сайты", "VPS-сервера"]) // kept sorted
+        // Sorted with a non-localized comparator so order is deterministic across locales (this
+        // caught a real CI failure: localizedCaseInsensitiveCompare ordered Cyrillic differently
+        // depending on the system locale).
+        XCTAssertEqual(state.manualGroups.map(\.name), ["VPS-сервера", "Сайты"])
         let vpsID = state.manualGroups.first { $0.name == "VPS-сервера" }!.id
         state.manual = [ManualEntry(address: "1.2.3.4", groupID: vpsID), ManualEntry(address: "5.6.7.8")]
 
