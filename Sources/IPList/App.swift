@@ -120,15 +120,38 @@ import UniformTypeIdentifiers
     func applyIconVisibility() {
         NSApp.setActivationPolicy(state.dockIconVisible ? .regular : .accessory)
     }
-    func addManual(_ text: String) {
+    func addManual(_ text: String, groupID: UUID? = nil) {
         let values = text.split(whereSeparator: { $0.isWhitespace || $0 == "," || $0 == ";" }).map(String.init)
         guard !values.isEmpty else { return }
         let invalid = values.filter { normalizeIP($0) == nil }
         guard invalid.isEmpty else { error = "Некорректные IPv4 / CIDR: " + invalid.joined(separator: ", "); return }
         let before = state.export
-        state.manual = Array(Set(state.manual + values.compactMap(normalizeIP))).sorted()
+        let existing = Set(state.manual.map(\.address))
+        let normalized = Array(Set(values.compactMap(normalizeIP)))
+        let additions = normalized.filter { !existing.contains($0) }.sorted().map { ManualEntry(address: $0, groupID: groupID) }
+        state.manual = (state.manual + additions).sorted { $0.address < $1.address }
         record(before: before, reason: "Добавлены мои IP"); persist()
     }
+    func removeManual(id: UUID) {
+        let before = state.export
+        state.manual.removeAll { $0.id == id }
+        record(before: before, reason: "Удалён мой IP"); persist()
+    }
+    func updateManualNote(id: UUID, note: String) {
+        guard let index = state.manual.firstIndex(where: { $0.id == id }) else { return }
+        state.manual[index].note = note; persist()
+    }
+    func setManualGroup(id: UUID, groupID: UUID?) {
+        guard let index = state.manual.firstIndex(where: { $0.id == id }) else { return }
+        state.manual[index].groupID = groupID; persist()
+    }
+    @discardableResult func addGroup(name: String) -> Bool {
+        let ok = state.addGroup(name: name)
+        if ok { persist() } else { error = "Группа с таким именем уже есть или имя пустое." }
+        return ok
+    }
+    func renameGroup(id: UUID, name: String) { state.renameGroup(id: id, name: name); persist() }
+    func deleteGroup(id: UUID) { state.deleteGroup(id: id); persist() }
     func testSources() async {
         guard !busy && !testingSources else { return }
         testingSources = true; sourceChecks = []; defer { testingSources = false }
@@ -254,6 +277,10 @@ import UniformTypeIdentifiers
     @Published var importSelection: Set<String> = []
     @Published var showImport = false
     @Published var expandedCategories: Set<String> = []
+    @Published var manualGroupID: UUID?
+    @Published var newGroupName = ""
+    @Published var editingGroupID: UUID?
+    @Published var editingGroupName = ""
 }
 
 struct ContentView: View {
@@ -428,18 +455,81 @@ struct ContentView: View {
     private var selectedCount: Int { store.state.services.filter { store.state.selected.contains($0.id) }.count }
     private var allSelected: Bool { !store.state.services.isEmpty && selectedCount == store.state.services.count }
 
+    private struct ManualSection: Identifiable { var id: String; var name: String; var entries: [ManualEntry] }
+
+    private var manualGroupSections: [ManualSection] {
+        guard !store.state.manual.isEmpty else { return [] }
+        var sections: [ManualSection] = store.state.manualGroups.compactMap { group in
+            let entries = store.state.manual.filter { $0.groupID == group.id }
+            return entries.isEmpty ? nil : ManualSection(id: group.id.uuidString, name: group.name, entries: entries)
+        }
+        let ungrouped = store.state.manual.filter { $0.groupID == nil }
+        if !ungrouped.isEmpty { sections.append(ManualSection(id: "none", name: "Без группы", entries: ungrouped)) }
+        return sections
+    }
+
     private var manualView: some View {
         VStack(alignment: .leading, spacing: 12) {
             Toggle("Включать «Мои IP» в выгрузку", isOn: Binding(get: { store.state.manualEnabled }, set: { store.setManualEnabled($0) }))
-            TextField("Например: 77.88.55.55, 192.0.2.0/24", text: $ui.manual).textFieldStyle(.roundedBorder)
             HStack {
-                Button("Добавить") { store.addManual(ui.manual); if store.error == nil { ui.manual = "" } }
+                TextField("Например: 77.88.55.55, 192.0.2.0/24", text: $ui.manual).textFieldStyle(.roundedBorder)
+                Picker("", selection: $ui.manualGroupID) {
+                    Text("Без группы").tag(UUID?.none)
+                    ForEach(store.state.manualGroups) { group in Text(group.name).tag(Optional(group.id)) }
+                }.labelsHidden().frame(width: 180)
+            }
+            HStack {
+                Button("Добавить") { store.addManual(ui.manual, groupID: ui.manualGroupID); if store.error == nil { ui.manual = "" } }
                 Button("Импорт из Amnezia…") { ui.importRows = store.importFile(); ui.importSelection = []; ui.showImport = !ui.importRows.isEmpty }
             }
-            Text("IPv4 / CIDR через пробел или запятую. Адрес подсети нормализуется по маске.").font(.caption).foregroundStyle(.secondary)
-            List(store.state.manual, id: \.self) { ip in
-                HStack { Text(ip).font(.system(.body, design: .monospaced)); Spacer(); Button(role: .destructive) { let before = store.state.export; store.state.manual.removeAll { $0 == ip }; store.record(before: before, reason: "Удалён мой IP"); store.persist() } label: { Image(systemName: "trash") }.buttonStyle(.borderless) }
+            Text("IPv4 / CIDR через пробел или запятую. Адрес подсети нормализуется по маске. Группа применяется ко всем адресам, добавленным за раз.").font(.caption).foregroundStyle(.secondary)
+
+            groupManagementView
+
+            List {
+                ForEach(manualGroupSections) { section in
+                    Section(section.name) {
+                        ForEach(section.entries) { entry in manualRow(entry) }
+                    }
+                }
             }
+        }
+    }
+
+    private var groupManagementView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                TextField("Новая группа, например «VPS-сервера»", text: $ui.newGroupName).textFieldStyle(.roundedBorder)
+                Button("Добавить группу") { if store.addGroup(name: ui.newGroupName) { ui.newGroupName = "" } }
+            }
+            ForEach(store.state.manualGroups) { group in
+                HStack {
+                    if ui.editingGroupID == group.id {
+                        TextField("Название группы", text: $ui.editingGroupName)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { store.renameGroup(id: group.id, name: ui.editingGroupName); ui.editingGroupID = nil }
+                        Button("Готово") { store.renameGroup(id: group.id, name: ui.editingGroupName); ui.editingGroupID = nil }
+                    } else {
+                        Text(group.name).font(.caption)
+                        Spacer()
+                        Button("Переименовать") { ui.editingGroupID = group.id; ui.editingGroupName = group.name }.buttonStyle(.borderless).font(.caption)
+                    }
+                    Button(role: .destructive) { store.deleteGroup(id: group.id) } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
+                }
+            }
+        }
+    }
+
+    private func manualRow(_ entry: ManualEntry) -> some View {
+        HStack {
+            Text(entry.address).font(.system(.body, design: .monospaced)).frame(minWidth: 180, alignment: .leading)
+            TextField("Примечание", text: Binding(get: { entry.note }, set: { store.updateManualNote(id: entry.id, note: $0) }))
+                .textFieldStyle(.roundedBorder)
+            Picker("", selection: Binding(get: { entry.groupID }, set: { store.setManualGroup(id: entry.id, groupID: $0) })) {
+                Text("Без группы").tag(UUID?.none)
+                ForEach(store.state.manualGroups) { group in Text(group.name).tag(Optional(group.id)) }
+            }.labelsHidden().frame(width: 160)
+            Button(role: .destructive) { store.removeManual(id: entry.id) } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
         }
     }
 
@@ -478,7 +568,7 @@ struct ContentView: View {
     }
 
     private func owners(of ip: String) -> String {
-        (store.state.services.filter { store.state.selected.contains($0.id) && $0.addresses.contains(ip) }.map(\.name) + (store.state.manualEnabled && store.state.manual.contains(ip) ? ["Мои IP"] : [])).joined(separator: ", ")
+        (store.state.services.filter { store.state.selected.contains($0.id) && $0.addresses.contains(ip) }.map(\.name) + (store.state.manualEnabled && store.state.manual.contains { $0.address == ip } ? ["Мои IP"] : [])).joined(separator: ", ")
     }
 
     private var modePicker: some View {

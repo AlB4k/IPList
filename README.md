@@ -26,7 +26,7 @@
 - `amnezia-ip-lite.json` — компактный список подсетей IPv4 для мобильных клиентов и более строгих условий;
 - `amnezia-ip.json` — полный российский IPv4-сегмент для максимального покрытия на десктопе.
 
-Свои адреса можно добавить в категорию «Мои IP» и по желанию включить в любой режим экспорта.
+Свои адреса можно добавить в категорию «Мои IP» и по желанию включить в любой режим экспорта — их можно раскладывать по собственным группам (например, «VPS-сервера», «Сайты») и подписывать примечанием.
 
 ### Скриншоты
 
@@ -60,7 +60,7 @@
 
 ### Установка и запуск
 
-**Готовый DMG:** [скачать IPList-1.2.1.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.2.1.dmg) со страницы [Releases](https://github.com/AlB4k/IPList/releases/latest). DMG содержит `IPList.app`, ярлык на `/Applications` и инструкцию по первому запуску.
+**Готовый DMG:** [скачать IPList-1.3.0.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.3.0.dmg) со страницы [Releases](https://github.com/AlB4k/IPList/releases/latest). DMG содержит `IPList.app`, ярлык на `/Applications` и инструкцию по первому запуску.
 
 Автообновления в приложении нет: если уже установлена более ранняя версия, для перехода на новую скачайте свежий DMG и перетащите `IPList.app` в `/Applications` поверх старого — настройки и списки в `~/Library/Application Support/IPList/` сохранятся.
 
@@ -81,7 +81,7 @@ open dist/IPList.app
 
 1. Откройте IPList и нажмите «Проверить сейчас».
 2. На вкладке «Каталог» выберите режим выгрузки и отметьте нужные категории или отдельные сервисы. По умолчанию выбраны все категории, группы свёрнуты.
-3. На вкладке «Мои IP» добавьте IPv4/CIDR вручную или импортируйте существующий экспорт Amnezia. Импортированные адреса показываются для выбора и не включаются автоматически.
+3. На вкладке «Мои IP» добавьте IPv4/CIDR вручную (можно сразу выбрать группу) или импортируйте существующий экспорт Amnezia. Импортированные адреса показываются для выбора и не включаются автоматически. Группами и примечаниями можно управлять и позже — список сгруппирован, группы создаются, переименовываются и удаляются прямо там же (удаление группы не удаляет сами адреса, они становятся «без группы»).
 4. На вкладке «Выгрузка» решите, включать ли «Мои IP» в файл, и сохраните JSON.
 5. В AmneziaVPN откройте раздельное туннелирование по сайтам, выберите режим «адреса из списка НЕ используют VPN» и импортируйте сохранённый JSON.
 
@@ -175,7 +175,7 @@ The app was built around [lib4u/amnezia-tunneling-ru](https://github.com/lib4u/a
 - `amnezia-ip-lite.json`: compact IPv4 subnet list intended for mobile clients and stricter environments.
 - `amnezia-ip.json`: full Russian IPv4 segment list for maximum desktop coverage.
 
-Manual addresses can be added in the "My IP" category and optionally included in any export mode.
+Manual addresses can be added in the "My IP" category and optionally included in any export mode — you can organize them into your own groups (e.g. "VPS servers", "Websites") and attach a note to each one.
 
 ### Screenshots
 
@@ -209,7 +209,7 @@ Manual addresses can be added in the "My IP" category and optionally included in
 
 ### Install And Run
 
-**Ready-made DMG:** [download IPList-1.2.1.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.2.1.dmg) from the [Releases](https://github.com/AlB4k/IPList/releases/latest) page. The DMG contains `IPList.app`, an `/Applications` shortcut, and a first-launch note.
+**Ready-made DMG:** [download IPList-1.3.0.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.3.0.dmg) from the [Releases](https://github.com/AlB4k/IPList/releases/latest) page. The DMG contains `IPList.app`, an `/Applications` shortcut, and a first-launch note.
 
 There is no in-app auto-update: if an earlier version is already installed, download the new DMG and drag `IPList.app` over the old one in `/Applications` — settings and lists under `~/Library/Application Support/IPList/` are preserved.
 
@@ -230,7 +230,7 @@ For regular use, move `IPList.app` to `/Applications` and add it to "System Sett
 
 1. Open IPList and click "Check now".
 2. In "Catalog", choose the export mode and select categories or individual services. All categories are selected by default, and groups are collapsed by default.
-3. In "My IP", add IPv4/CIDR entries manually or import an existing Amnezia JSON file. Imported entries are shown for selection and are not enabled silently.
+3. In "My IP", add IPv4/CIDR entries manually (optionally picking a group right away) or import an existing Amnezia JSON file. Imported entries are shown for selection and are not enabled silently. Groups and notes can be managed later too — the list is grouped, and groups can be created, renamed, and deleted right there (deleting a group never deletes its addresses; they become ungrouped).
 4. In "Export", choose whether manual addresses should be included, then save the JSON file.
 5. In AmneziaVPN, open site split tunneling, choose the mode where addresses from the list should not use VPN, and import the exported JSON.
 

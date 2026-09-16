@@ -6,7 +6,7 @@ func XCTAssertGreaterThan(_ a: Int, _ b: Int) { precondition(a > b) }
 @main struct CoreTests {
     static func main() async throws {
         let tests = CoreTests()
-        tests.testIPv4AndCIDR(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testCatalogDefaults(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
+        tests.testIPv4AndCIDR(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testCatalogDefaults(); tests.testManualGroups(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
         print("All checks passed")
     }
     func testIPv4AndCIDR() {
@@ -28,7 +28,7 @@ func XCTAssertGreaterThan(_ a: Int, _ b: Int) { precondition(a > b) }
         var state = AppState()
         state.services = [Service(id: "a", name: "A", category: "C", domains: [], addresses: ["1.2.3.4"]), Service(id: "b", name: "B", category: "C", domains: [], addresses: ["1.2.3.4", "2.3.4.5"])]
         XCTAssertTrue(state.export.isEmpty)
-        state.selected = ["a"]; state.manual = ["1.2.3.4", "3.4.5.6"]
+        state.selected = ["a"]; state.manual = [ManualEntry(address: "1.2.3.4"), ManualEntry(address: "3.4.5.6")]
         XCTAssertEqual(state.export, ["1.2.3.4", "3.4.5.6"])
         state.manualEnabled = false; XCTAssertEqual(state.export, ["1.2.3.4"])
     }
@@ -45,7 +45,10 @@ func XCTAssertGreaterThan(_ a: Int, _ b: Int) { precondition(a > b) }
         XCTAssertTrue(migrated.selectionInitialized)
         XCTAssertTrue(!migrated.selectAllByDefault)
         XCTAssertEqual(migrated.mode, .targeted)
-        XCTAssertEqual(migrated.manual, ["3.4.5.6"])
+        // Pre-grouping releases stored "manual" as a plain array of address strings.
+        XCTAssertEqual(migrated.manual.map(\.address), ["3.4.5.6"])
+        XCTAssertTrue(migrated.manual.allSatisfy { $0.groupID == nil && $0.note.isEmpty })
+        XCTAssertTrue(migrated.manualGroups.isEmpty)
         let emptySelection = Data(String(decoding: partial, as: UTF8.self).replacingOccurrences(of: "\"selected\":[\"a\"]", with: "\"selected\":[]").utf8)
         let defaults = try JSONDecoder().decode(AppState.self, from: emptySelection)
         XCTAssertEqual(defaults.selected, ["a", "b"])
@@ -70,7 +73,7 @@ func XCTAssertGreaterThan(_ a: Int, _ b: Int) { precondition(a > b) }
         state.applyCatalog([Service(id: "a", name: "A", category: "C", domains: [], addresses: ["1.2.3.4"])])
         state.liteAddresses = ["192.0.2.0/24"]
         state.fullAddresses = ["198.51.100.0/24"]
-        state.manual = ["203.0.113.9"]
+        state.manual = [ManualEntry(address: "203.0.113.9")]
         for mode in ExportMode.allCases {
             state.mode = mode
             let expected: Set<String> = mode == .targeted ? ["1.2.3.4"] : (mode == .lite ? ["192.0.2.0/24"] : ["198.51.100.0/24"])
@@ -91,6 +94,29 @@ func XCTAssertGreaterThan(_ a: Int, _ b: Int) { precondition(a > b) }
         XCTAssertEqual(state.lastCheck(for: .lite), Date(timeIntervalSince1970: 123))
         XCTAssertNil(state.lastCheck(for: .full))
         state.deleteProfile(id: id); XCTAssertTrue(state.profiles.isEmpty)
+    }
+    func testManualGroups() {
+        var state = AppState()
+        XCTAssertTrue(state.addGroup(name: "VPS-сервера"))
+        XCTAssertTrue(state.addGroup(name: "Сайты"))
+        XCTAssertTrue(!state.addGroup(name: "  Сайты  ")) // duplicate name (case/whitespace-insensitive) is rejected
+        XCTAssertTrue(!state.addGroup(name: "   ")) // empty name is rejected
+        XCTAssertEqual(state.manualGroups.map(\.name), ["Сайты", "VPS-сервера"]) // kept sorted
+        let vpsID = state.manualGroups.first { $0.name == "VPS-сервера" }!.id
+        state.manual = [ManualEntry(address: "1.2.3.4", groupID: vpsID), ManualEntry(address: "5.6.7.8")]
+
+        state.renameGroup(id: vpsID, name: "VPS")
+        XCTAssertEqual(state.manualGroups.first { $0.id == vpsID }?.name, "VPS")
+
+        state.deleteGroup(id: vpsID)
+        XCTAssertTrue(!state.manualGroups.contains { $0.id == vpsID })
+        // Deleting a group must not delete its addresses — they become ungrouped.
+        XCTAssertEqual(state.manual.count, 2)
+        XCTAssertNil(state.manual.first { $0.address == "1.2.3.4" }?.groupID)
+
+        let roundtrip = try! JSONDecoder().decode(AppState.self, from: JSONEncoder().encode(state))
+        XCTAssertEqual(roundtrip.manual, state.manual)
+        XCTAssertEqual(roundtrip.manualGroups, state.manualGroups)
     }
     func testNetworkFailures() async throws {
         let config = URLSessionConfiguration.ephemeral

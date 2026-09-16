@@ -63,6 +63,18 @@ enum ExportMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+struct IPGroup: Codable, Identifiable, Equatable {
+    var id: UUID = UUID()
+    var name: String
+}
+
+struct ManualEntry: Codable, Identifiable, Equatable {
+    var id: UUID = UUID()
+    var address: String
+    var groupID: UUID?
+    var note: String = ""
+}
+
 struct SelectionProfile: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
     var name: String
@@ -75,7 +87,8 @@ struct SelectionProfile: Codable, Identifiable, Equatable {
 struct AppState: Codable {
     var services: [Service] = []
     var selected: Set<String> = []
-    var manual: [String] = []
+    var manual: [ManualEntry] = []
+    var manualGroups: [IPGroup] = []
     var manualEnabled = true
     var changes: [Change] = []
     var lastCheck: Date?
@@ -106,7 +119,7 @@ struct AppState: Codable {
         case .full:
             automaticAddresses = fullAddresses
         }
-        return automaticAddresses.union(manualEnabled ? manual : [])
+        return automaticAddresses.union(manualEnabled ? Set(manual.map(\.address)) : [])
     }
     var exportReady: Bool {
         switch mode {
@@ -156,6 +169,24 @@ struct AppState: Codable {
     }
 
     mutating func deleteProfile(id: UUID) { profiles.removeAll { $0.id == id } }
+
+    @discardableResult mutating func addGroup(name: String) -> Bool {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, !manualGroups.contains(where: { $0.name.localizedCaseInsensitiveCompare(clean) == .orderedSame }) else { return false }
+        manualGroups.append(IPGroup(name: clean))
+        manualGroups.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        return true
+    }
+    mutating func renameGroup(id: UUID, name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, let index = manualGroups.firstIndex(where: { $0.id == id }) else { return }
+        manualGroups[index].name = clean
+        manualGroups.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+    mutating func deleteGroup(id: UUID) {
+        manualGroups.removeAll { $0.id == id }
+        for index in manual.indices where manual[index].groupID == id { manual[index].groupID = nil }
+    }
     func lastCheck(for mode: ExportMode) -> Date? { lastChecks[mode] ?? (mode == .targeted ? lastCheck : nil) }
     mutating func markChecked(_ mode: ExportMode, at date: Date = Date()) {
         lastChecks[mode] = date
@@ -167,6 +198,7 @@ struct AppState: Codable {
         case sourceURL, categoryBaseURL, liteSourceURL, fullSourceURL, mode, liteAddresses, fullAddresses
         case profiles, selectionInitialized, selectAllByDefault, lastChecks
         case dockIconVisible, menuBarIconVisible, hasUnseenChanges
+        case manualGroups
     }
 
     init() {}
@@ -175,7 +207,14 @@ struct AppState: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         services = try c.decodeIfPresent([Service].self, forKey: .services) ?? []
         selected = try c.decodeIfPresent(Set<String>.self, forKey: .selected) ?? []
-        manual = try c.decodeIfPresent([String].self, forKey: .manual) ?? []
+        if let entries = try? c.decodeIfPresent([ManualEntry].self, forKey: .manual) {
+            manual = entries
+        } else {
+            // Pre-grouping releases stored manual addresses as plain strings.
+            let old = try c.decodeIfPresent([String].self, forKey: .manual) ?? []
+            manual = old.map { ManualEntry(address: $0) }
+        }
+        manualGroups = try c.decodeIfPresent([IPGroup].self, forKey: .manualGroups) ?? []
         manualEnabled = try c.decodeIfPresent(Bool.self, forKey: .manualEnabled) ?? true
         changes = try c.decodeIfPresent([Change].self, forKey: .changes) ?? []
         lastCheck = try c.decodeIfPresent(Date.self, forKey: .lastCheck)
