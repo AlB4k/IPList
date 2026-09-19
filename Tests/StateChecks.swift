@@ -44,11 +44,13 @@ struct StateChecks {
         """#
         var state = try JSONDecoder().decode(AppState.self, from: Data(legacyJSON.utf8))
         check(state.stateVersion == 13 && state.catalog == nil, "legacy state remains in its 1.3 representation before a validated transaction")
+        check(state.sourceRouteSnapshots.isEmpty, "legacy state defaults to no raw source snapshots")
         let original = state
         let invalid = matchedCatalog(services: [CatalogService(id: "duplicate", name: "one"), CatalogService(id: "duplicate", name: "two")])
         check(!state.applyMatchedCatalog(invalid), "invalid candidate must be rejected")
         check(state.services == original.services && state.manual == original.manual && state.profiles == original.profiles
                 && state.liteAddresses == original.liteAddresses && state.fullAddresses == original.fullAddresses
+                && state.sourceRouteSnapshots == original.sourceRouteSnapshots
                 && state.mode == original.mode && state.sourceURL == original.sourceURL && state.lastChecks == original.lastChecks,
               "failed migration must leave state untouched")
 
@@ -84,6 +86,8 @@ struct StateChecks {
         check(state.profiles[0].mode == .lite && !state.profiles[0].manualEnabled && !state.profiles[0].selectAllByDefault,
               "profile mode and policies survive")
         check(state.profiles[0].selectedUnassignedModes == Set(CatalogRouteMode.allCases), "legacy profile defaults select source remainders")
+        let persisted = try JSONDecoder().decode(AppState.self, from: JSONEncoder().encode(state))
+        check(persisted.sourceRouteSnapshots.isEmpty, "empty snapshot default survives the first 1.4 state write")
     }
 
     // This catches exports that accidentally fall back to the old whole-source

@@ -249,8 +249,8 @@ struct ConfigurationWriteResult: Identifiable {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { error = "Введите название профиля"; return }
         guard !state.profiles.contains(where: { $0.name.caseInsensitiveCompare(clean) == .orderedSame }) else { error = "Профиль с таким именем уже есть. Используйте обновление профиля."; return }
-        state.saveProfile(name: clean)
-        selectedProfileID = state.profiles.last?.id; persist(); message = "Профиль «\(clean)» сохранён."
+        guard let profileID = state.saveProfile(name: clean) else { return }
+        selectedProfileID = profileID; persist(); message = "Профиль «\(clean)» сохранён."
     }
     func updateProfile(_ id: UUID) {
         guard let index = state.profiles.firstIndex(where: { $0.id == id }) else { return }
@@ -341,7 +341,7 @@ struct ConfigurationWriteResult: Identifiable {
         message = "Обновляю каталог, три списка адресов, DNS и RIPEstat…"
         do {
             let before = state.export
-            let previousSources = sourceRoutes()
+            let previousSources = state.sourceRouteSnapshots
             let wasFirstRefresh = state.lastChecks.isEmpty && state.lastCheck == nil
             let transaction = try await RefreshPipeline.live().run(RefreshRequest(state: state))
             try Task.checkCancellation()
@@ -351,7 +351,12 @@ struct ConfigurationWriteResult: Identifiable {
             sourceChecks = transaction.sourceChecks
             nextRetry = .distantPast
             record(before: before, reason: wasFirstRefresh ? "Первая загрузка всех источников" : "Обновление всех источников")
-            let changedSources = recordSourceChanges(before: previousSources, after: transaction.sourceRoutes)
+            // A pre-1.4 state has no raw snapshot to compare. Its first
+            // accepted transaction establishes that baseline without creating
+            // a synthetic source-change notification.
+            let changedSources = previousSources.isEmpty
+                ? (added: 0, removed: 0)
+                : recordSourceChanges(before: previousSources, after: transaction.sourceRoutes)
             if !wasFirstRefresh && (changedSources.added > 0 || changedSources.removed > 0 || before != state.export) {
                 let content = UNMutableNotificationContent()
                 content.title = "IPList: список изменился"
@@ -369,31 +374,13 @@ struct ConfigurationWriteResult: Identifiable {
         }
     }
 
-    private func sourceRoutes() -> [ExportMode: Set<String>] {
-        if let catalog = state.catalog {
-            return [
-                .targeted: Set(catalog.services.flatMap(\.targetedAddresses)).union(state.unassignedRoutes[.targeted] ?? []),
-                .lite: Set(catalog.services.flatMap(\.liteAddresses)).union(state.unassignedRoutes[.lite] ?? []),
-                .full: Set(catalog.services.flatMap(\.fullAddresses)).union(state.unassignedRoutes[.full] ?? [])
-            ]
-        }
-        return [
-            .targeted: Set(state.services.flatMap(\.addresses)),
-            .lite: state.liteAddresses,
-            .full: state.fullAddresses
-        ]
-    }
-
     @discardableResult private func recordSourceChanges(before: [ExportMode: Set<String>], after: [ExportMode: Set<String>]) -> (added: Int, removed: Int) {
         var totalAdded = 0
         var totalRemoved = 0
-        for mode in ExportMode.allCases {
-            let added = (after[mode] ?? []).subtracting(before[mode] ?? []).sorted()
-            let removed = (before[mode] ?? []).subtracting(after[mode] ?? []).sorted()
-            guard !added.isEmpty || !removed.isEmpty else { continue }
-            totalAdded += added.count
-            totalRemoved += removed.count
-            state.changes.insert(Change(added: added, removed: removed, reason: "Источник: \(mode.title)"), at: 0)
+        for change in sourceRouteChanges(before: before, after: after) {
+            totalAdded += change.added.count
+            totalRemoved += change.removed.count
+            state.changes.insert(Change(added: change.added, removed: change.removed, reason: "Источник: \(change.mode.title)"), at: 0)
             state.hasUnseenChanges = true
         }
         state.changes = Array(state.changes.prefix(100))

@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 
 private func check(_ value: @autoclosure () -> Bool, _ message: String) {
     precondition(value(), message)
@@ -14,8 +15,12 @@ struct RefreshChecks {
         try await testCachedPartialEnrichmentCanCommit()
         try await testBundledEvidenceBootstrapsFirstRefresh()
         try await testOverallDeadlineDoesNotMutateWorkingState()
+        try await testUncooperativeSourceCannotDelayDeadline()
         try await testFragmentLimitDoesNotMutateWorkingState()
         try await testCancelledRefreshDoesNotMutateWorkingState()
+        try await testCancellationDoesNotAwaitUncooperativeSource()
+        try await testRefreshCommitsRawSourceSnapshotsAtomically()
+        try await testPartitionedUnchangedSourceHasNoRawRouteChange()
         try testPreMigrationBackupIsRawAndCreatedOnlyOnce()
         try testPreMigrationBackupDoesNotReplaceV11Backup()
         print("Refresh checks passed")
@@ -200,6 +205,23 @@ struct RefreshChecks {
         check(encoded(state) == before, "deadline expiry leaves working state unchanged")
     }
 
+    // A real URLSession continuation can outlive task cancellation. The
+    // deadline must still release the caller and ignore its late value.
+    private static func testUncooperativeSourceCannotDelayDeadline() async throws {
+        let state = legacyState()
+        let pipeline = fixturePipeline(overallTimeout: 0.02, loadFull: { _ in
+            try await delayedIgnoringCancellation(["203.0.113.0/24"], after: 0.25)
+        })
+        let started = Date()
+        do {
+            _ = try await pipeline.run(RefreshRequest(state: state))
+            check(false, "uncooperative source must still hit the overall deadline")
+        } catch let error as RefreshPipelineError {
+            check(error.isDeadlineExceeded, "uncooperative source returns the deadline error")
+        }
+        check(Date().timeIntervalSince(started) < 0.12, "deadline does not await a cancellation-uncooperative source")
+    }
+
     // Production mutation that this test catches: committing a partially
     // partitioned source when the matcher reaches its representation limit.
     private static func testFragmentLimitDoesNotMutateWorkingState() async throws {
@@ -241,6 +263,64 @@ struct RefreshChecks {
             check(false, "cancelled refresh must not return a transaction")
         } catch is CancellationError { }
         check(encoded(state) == before, "cancelled refresh leaves working state unchanged")
+    }
+
+    private static func testCancellationDoesNotAwaitUncooperativeSource() async throws {
+        let state = legacyState()
+        let pipeline = fixturePipeline(overallTimeout: 1, loadFull: { _ in
+            try await delayedIgnoringCancellation(["203.0.113.0/24"], after: 0.25)
+        })
+        let task = Task { try await pipeline.run(RefreshRequest(state: state)) }
+        await Task.yield()
+        let started = Date()
+        task.cancel()
+        do {
+            _ = try await task.value
+            check(false, "cancelled uncooperative source must not return a transaction")
+        } catch is CancellationError { }
+        check(Date().timeIntervalSince(started) < 0.12, "cancellation does not await an uncooperative source")
+    }
+
+    private static func testRefreshCommitsRawSourceSnapshotsAtomically() async throws {
+        let state = legacyState()
+        let pipeline = fixturePipeline(
+            loadLite: { _ in ["198.51.100.0/24"] },
+            loadFull: { _ in ["203.0.113.0/24"] }
+        )
+        let transaction = try await pipeline.run(RefreshRequest(state: state))
+        var committed = state
+        check(committed.applyRefreshTransaction(transaction), "valid transaction is committed")
+        check(committed.sourceRouteSnapshots == transaction.sourceRoutes, "state preserves canonical raw source routes with the matched catalog")
+
+        let before = encoded(committed)
+        let rejected = fixturePipeline(loadLite: { _ in throw FixtureError.unavailable })
+        do {
+            _ = try await rejected.run(RefreshRequest(state: committed))
+            check(false, "failed source must not produce a transaction")
+        } catch { }
+        check(encoded(committed) == before, "failed refresh cannot replace raw source snapshots")
+    }
+
+    private static func testPartitionedUnchangedSourceHasNoRawRouteChange() async throws {
+        let state = legacyState()
+        let service = CatalogService(id: "partitioned", name: "Partitioned", ipRanges: ["198.51.100.1"])
+        let pipeline = fixturePipeline(
+            loadCatalog: { _ in ServiceCatalog(services: [service]) },
+            loadLite: { _ in ["198.51.100.0/24"] },
+            loadFull: { _ in ["203.0.113.0/24"] }
+        )
+        let first = try await pipeline.run(RefreshRequest(state: state))
+        var committed = state
+        check(committed.applyRefreshTransaction(first), "partitioned transaction is committed")
+        let storedFragments = (committed.catalog?.services.first?.liteAddresses ?? [])
+            + (committed.unassignedRoutes[.lite] ?? [])
+        check(storedFragments.count > 1, "matcher partitions the stored Lite route")
+
+        let second = try await pipeline.run(RefreshRequest(state: committed))
+        check(
+            sourceRouteChanges(before: committed.sourceRouteSnapshots, after: second.sourceRoutes).isEmpty,
+            "identical raw source routes do not become synthetic changes after catalog partitioning"
+        )
     }
 
     // Production mutation that this test catches: serializing the migrated
@@ -319,6 +399,14 @@ struct RefreshChecks {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return try! encoder.encode(state)
+    }
+
+    private static func delayedIgnoringCancellation<T: Sendable>(_ value: T, after seconds: TimeInterval) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+                continuation.resume(returning: value)
+            }
+        }
     }
 }
 

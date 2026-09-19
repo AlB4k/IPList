@@ -206,6 +206,9 @@ struct AppState: Codable {
     var mode: ExportMode = .targeted
     var liteAddresses: Set<String> = []
     var fullAddresses: Set<String> = []
+    /// Exact normalized route sets from the most recently committed upstream
+    /// refresh. These are intentionally separate from catalog fragments.
+    var sourceRouteSnapshots: [ExportMode: Set<String>] = [:]
     var profiles: [SelectionProfile] = []
     var selectionInitialized = false
     var selectAllByDefault = true
@@ -359,16 +362,21 @@ struct AppState: Codable {
         if enabled { selectedUnassignedModes.insert(catalogMode) } else { selectedUnassignedModes.remove(catalogMode) }
     }
 
-    mutating func saveProfile(name: String) {
+    @discardableResult mutating func saveProfile(name: String) -> UUID? {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty else { return }
+        guard !clean.isEmpty else { return nil }
+        let profileID: UUID
         if let index = profiles.firstIndex(where: { $0.name.caseInsensitiveCompare(clean) == .orderedSame }) {
             let id = profiles[index].id
             profiles[index] = SelectionProfile(id: id, name: clean, selected: selectedCatalogIDs, selectedUnassignedModes: selectedUnassignedModes, mode: mode, manualEnabled: manualEnabled, selectAllByDefault: selectAllByDefault)
+            profileID = id
         } else {
-            profiles.append(SelectionProfile(name: clean, selected: selectedCatalogIDs, selectedUnassignedModes: selectedUnassignedModes, mode: mode, manualEnabled: manualEnabled, selectAllByDefault: selectAllByDefault))
+            let profile = SelectionProfile(name: clean, selected: selectedCatalogIDs, selectedUnassignedModes: selectedUnassignedModes, mode: mode, manualEnabled: manualEnabled, selectAllByDefault: selectAllByDefault)
+            profiles.append(profile)
+            profileID = profile.id
         }
         profiles.sort { $0.name.caseInsensitiveCompare($1.name) == .orderedAscending }
+        return profileID
     }
 
     @discardableResult mutating func applyProfile(id: UUID) -> Bool {
@@ -412,7 +420,7 @@ struct AppState: Codable {
     private enum CodingKeys: String, CodingKey {
         case stateVersion, services, selected, catalog, selectedCatalogIDs, selectedUnassignedModes, unassignedRoutes, cachedEnrichment, migrationDiagnostics
         case manual, manualEnabled, changes, lastCheck, intervalHours, automatic
-        case sourceURL, categoryBaseURL, liteSourceURL, fullSourceURL, mode, liteAddresses, fullAddresses
+        case sourceURL, categoryBaseURL, liteSourceURL, fullSourceURL, mode, liteAddresses, fullAddresses, sourceRouteSnapshots
         case profiles, selectionInitialized, selectAllByDefault, lastChecks
         case dockIconVisible, menuBarIconVisible, hasUnseenChanges
         case manualGroups
@@ -451,6 +459,7 @@ struct AppState: Codable {
         mode = try c.decodeIfPresent(ExportMode.self, forKey: .mode) ?? .targeted
         liteAddresses = try c.decodeIfPresent(Set<String>.self, forKey: .liteAddresses) ?? []
         fullAddresses = try c.decodeIfPresent(Set<String>.self, forKey: .fullAddresses) ?? []
+        sourceRouteSnapshots = try c.decodeIfPresent([ExportMode: Set<String>].self, forKey: .sourceRouteSnapshots) ?? [:]
         profiles = try c.decodeIfPresent([SelectionProfile].self, forKey: .profiles) ?? []
         let hadSelectionPolicy = c.contains(.selectAllByDefault)
         selectAllByDefault = try c.decodeIfPresent(Bool.self, forKey: .selectAllByDefault) ?? true
@@ -546,6 +555,7 @@ struct AppState: Codable {
         for mode in ExportMode.allCases {
             candidate.markChecked(mode, at: transaction.completedAt)
         }
+        candidate.sourceRouteSnapshots = transaction.sourceRoutes
         self = candidate
         return true
     }
@@ -604,6 +614,24 @@ struct RefreshTransaction: Sendable {
     var completedAt: Date
 }
 
+struct SourceRouteChange: Equatable {
+    var mode: ExportMode
+    var added: [String]
+    var removed: [String]
+}
+
+func sourceRouteChanges(
+    before: [ExportMode: Set<String>],
+    after: [ExportMode: Set<String>]
+) -> [SourceRouteChange] {
+    ExportMode.allCases.compactMap { mode in
+        let added = (after[mode] ?? []).subtracting(before[mode] ?? []).sorted()
+        let removed = (before[mode] ?? []).subtracting(after[mode] ?? []).sorted()
+        guard !added.isEmpty || !removed.isEmpty else { return nil }
+        return SourceRouteChange(mode: mode, added: added, removed: removed)
+    }
+}
+
 struct RefreshPipelineDependencies: Sendable {
     var loadCatalog: @Sendable (RefreshRequest) async throws -> ServiceCatalog
     var loadTargeted: @Sendable (RefreshRequest) async throws -> [TargetedRoute]
@@ -638,6 +666,85 @@ enum RefreshPipelineError: LocalizedError {
         case .validationFailure(_, let message):
             return message
         }
+    }
+}
+
+/// An unstructured deadline race deliberately does not await a task that has
+/// ignored cancellation (for example, a callback-backed network continuation).
+/// Its late value is discarded, so it cannot publish a refresh transaction.
+private final class HardDeadlineRace<Output>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Output, Error>?
+    private var completed = false
+    private var worker: Task<Void, Never>?
+    private var timer: Task<Void, Never>?
+
+    func start(
+        continuation: CheckedContinuation<Output, Error>,
+        timeout: TimeInterval,
+        timeoutError: @escaping @Sendable () -> Error,
+        operation: @escaping @Sendable () async throws -> Output
+    ) {
+        lock.lock()
+        if completed {
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+
+        let worker = Task.detached { [self] in
+            do {
+                finish(.success(try await operation()), cancelWorker: false)
+            } catch {
+                finish(.failure(error), cancelWorker: false)
+            }
+        }
+        let timer = Task.detached { [self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                finish(.failure(timeoutError()), cancelWorker: true)
+            } catch { }
+        }
+        record(worker: worker, timer: timer)
+    }
+
+    func cancel() {
+        finish(.failure(CancellationError()), cancelWorker: true)
+    }
+
+    private func record(worker: Task<Void, Never>, timer: Task<Void, Never>) {
+        lock.lock()
+        if completed {
+            lock.unlock()
+            worker.cancel()
+            timer.cancel()
+            return
+        }
+        self.worker = worker
+        self.timer = timer
+        lock.unlock()
+    }
+
+    private func finish(_ result: Result<Output, Error>, cancelWorker: Bool) {
+        lock.lock()
+        guard !completed else {
+            lock.unlock()
+            return
+        }
+        completed = true
+        let continuation = self.continuation
+        self.continuation = nil
+        let worker = self.worker
+        let timer = self.timer
+        self.worker = nil
+        self.timer = nil
+        lock.unlock()
+
+        if cancelWorker { worker?.cancel() }
+        timer?.cancel()
+        continuation?.resume(with: result)
     }
 }
 
@@ -756,19 +863,19 @@ struct RefreshPipeline: Sendable {
     private func withOverallDeadline<Output: Sendable>(
         operation: @escaping @Sendable () async throws -> Output
     ) async throws -> Output {
-        try await withThrowingTaskGroup(of: Output.self) { group in
-            group.addTask { try await operation() }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(overallTimeout * 1_000_000_000))
-                try Task.checkCancellation()
-                throw RefreshPipelineError.deadlineExceeded([])
+        let race = HardDeadlineRace<Output>()
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                race.start(
+                    continuation: continuation,
+                    timeout: overallTimeout,
+                    timeoutError: { RefreshPipelineError.deadlineExceeded([]) },
+                    operation: operation
+                )
             }
-            defer { group.cancelAll() }
-            guard let result = try await group.next() else {
-                throw RefreshPipelineError.deadlineExceeded([])
-            }
-            return result
-        }
+        }, onCancel: {
+            race.cancel()
+        })
     }
 
     private enum SourcePayload: Sendable {

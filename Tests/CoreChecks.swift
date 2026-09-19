@@ -32,7 +32,7 @@ func allowedIPv4Routes(in config: String) -> [IPv4Network] {
 @main struct CoreTests {
     static func main() async throws {
         let tests = CoreTests()
-        tests.testIPv4AndCIDR(); tests.testIPv4NetworkSetOperations(); tests.testIPv4NetworkReferenceOracle(); tests.testAllowedIPsFormattingDeduplicatesExistingCoverage(); try tests.testAmneziaWGParsePreservesUnchangedBytes(); try tests.testAmneziaWGPreservesAllowedIPSuffixesAndOpaqueValues(); try tests.testAmneziaWGOperationsNormalizeRoutes(); try tests.testAmneziaWGRejectsUnsafeConfigurationsWithoutLeakingKeys(); try tests.testAmneziaWGLargeRouteRegression(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testCatalogDefaults(); tests.testManualGroups(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
+        tests.testIPv4AndCIDR(); tests.testIPv4NetworkSetOperations(); tests.testIPv4NetworkReferenceOracle(); tests.testAllowedIPsFormattingDeduplicatesExistingCoverage(); try tests.testAmneziaWGParsePreservesUnchangedBytes(); try tests.testAmneziaWGPreservesAllowedIPSuffixesAndOpaqueValues(); try tests.testAmneziaWGOperationsNormalizeRoutes(); try tests.testAmneziaWGRejectsUnsafeConfigurationsWithoutLeakingKeys(); try tests.testAmneziaWGLargeRouteRegression(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testProfileSaveReturnsCreatedOrUpdatedID(); tests.testCatalogDefaults(); tests.testManualGroups(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
         print("All checks passed")
     }
     func testIPv4AndCIDR() {
@@ -273,6 +273,16 @@ func allowedIPv4Routes(in config: String) -> [IPv4Network] {
         XCTAssertEqual(state.lastCheck(for: .lite), Date(timeIntervalSince1970: 123))
         XCTAssertNil(state.lastCheck(for: .full))
         state.deleteProfile(id: id); XCTAssertTrue(state.profiles.isEmpty)
+    }
+    func testProfileSaveReturnsCreatedOrUpdatedID() {
+        var state = AppState()
+        state.saveProfile(name: "Z")
+        let existingID = state.profiles[0].id
+        let createdID = state.saveProfile(name: "A")
+        XCTAssertEqual(createdID, state.profiles.first { $0.name == "A" }?.id)
+        XCTAssertEqual(state.profiles.last?.id, existingID)
+        let updatedID = state.saveProfile(name: "A")
+        XCTAssertEqual(updatedID, createdID)
     }
     func testManualGroups() {
         var state = AppState()
