@@ -24,3 +24,13 @@ catalog_sources=(
 )
 swiftc -parse-as-library "${catalog_sources[@]}" Tests/CatalogChecks.swift -o .build/checks/catalog-checks
 .build/checks/catalog-checks
+
+if [[ -f Tests/EnrichmentChecks.swift ]]; then
+  swiftc -parse-as-library \
+    Sources/IPList/AddressMatcher.swift \
+    Sources/IPList/CatalogModels.swift \
+    Sources/IPList/EnrichmentLoader.swift \
+    Tests/EnrichmentChecks.swift \
+    -o .build/checks/enrichment-checks
+  .build/checks/enrichment-checks
+fi

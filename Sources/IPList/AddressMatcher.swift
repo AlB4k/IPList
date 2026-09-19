@@ -138,6 +138,61 @@ func collapseIPv4(_ networks: [IPv4Network]) -> [IPv4Network] {
     return compacted
 }
 
+func ipv4SetsEqual(_ lhs: [IPv4Network], _ rhs: [IPv4Network]) -> Bool {
+    collapseIPv4(lhs) == collapseIPv4(rhs)
+}
+
+/// A compact interval index over a collapsed source list. Queries only scan
+/// intervals that overlap the proof network; no address-level expansion occurs.
+struct IPv4RouteIndex: Sendable {
+    private let routes: [IPv4Network]
+
+    init(routes: [IPv4Network]) {
+        self.routes = collapseIPv4(routes)
+    }
+
+    func intersections(with evidence: IPv4Network) -> [IPv4Network] {
+        var low = 0
+        var high = routes.count
+        while low < high {
+            let middle = low + (high - low) / 2
+            if routes[middle].lastAddress < evidence.network {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        var result: [IPv4Network] = []
+        var index = low
+        while index < routes.count, routes[index].network <= evidence.lastAddress {
+            if let intersection = routes[index].intersection(evidence) {
+                result.append(intersection)
+            }
+            index += 1
+        }
+        return result
+    }
+}
+
+extension IPv4Network {
+    func subtracting(_ exclusions: [IPv4Network], limit: Int) throws -> [IPv4Network] {
+        guard limit >= 0 else { throw IPv4NetworkError.invalidFragmentLimit(limit) }
+        var fragments = [self]
+        for exclusion in collapseIPv4(exclusions) {
+            var next: [IPv4Network] = []
+            for fragment in fragments {
+                let result = try fragment.subtracting(exclusion, limit: limit)
+                guard next.count <= limit - result.count else {
+                    throw IPv4NetworkError.fragmentLimitExceeded(limit: limit)
+                }
+                next.append(contentsOf: result)
+            }
+            fragments = next
+        }
+        return fragments.sorted()
+    }
+}
+
 private func mergeFinalSiblings(in networks: inout [IPv4Network]) {
     while networks.count >= 2 {
         let right = networks[networks.count - 1]

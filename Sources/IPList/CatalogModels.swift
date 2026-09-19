@@ -6,6 +6,113 @@ enum CatalogFreshness: String, Codable, Sendable {
     case cached
 }
 
+/// How recently DNS/ASN evidence was obtained. This is deliberately separate
+/// from `CatalogFreshness`: the YAML catalog and the address evidence refresh
+/// on different schedules and can fail independently.
+enum EnrichmentFreshness: String, Codable, Sendable {
+    case fresh
+    case cached
+    case stale
+    case bundled
+}
+
+enum EnrichmentSource: String, Codable, CaseIterable, Sendable {
+    case dns
+    case ripeStat
+}
+
+/// A source address from the targeted list. A hostname, when available from
+/// the list, is evidence of its direct service ownership without a DNS lookup.
+struct TargetedRoute: Codable, Hashable, Sendable {
+    var domain: String?
+    var address: String
+
+    init(domain: String? = nil, address: String) {
+        let cleanDomain = domain?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        self.domain = cleanDomain?.isEmpty == true ? nil : cleanDomain
+        self.address = address.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// Last known good DNS and RIPEstat evidence for one catalog service.
+struct ServiceEnrichment: Codable, Hashable, Sendable {
+    var serviceID: String
+    var dnsAddresses: [String]
+    var asnPrefixes: [String]
+    var dnsUpdatedAt: Date?
+    var asnUpdatedAt: Date?
+    var freshness: EnrichmentFreshness
+
+    init(
+        serviceID: String,
+        dnsAddresses: [String] = [],
+        asnPrefixes: [String] = [],
+        dnsUpdatedAt: Date? = nil,
+        asnUpdatedAt: Date? = nil,
+        freshness: EnrichmentFreshness = .fresh
+    ) {
+        self.serviceID = serviceID
+        // Keep these models independent of the CIDR engine so catalog-only
+        // decoding remains usable in the lightweight catalog check harness.
+        self.dnsAddresses = Array(Set(dnsAddresses)).sorted()
+        self.asnPrefixes = Array(Set(asnPrefixes)).sorted()
+        self.dnsUpdatedAt = dnsUpdatedAt
+        self.asnUpdatedAt = asnUpdatedAt
+        self.freshness = freshness
+    }
+}
+
+/// Persistable, provenance-bearing cache used both for bundled evidence and a
+/// later last-successful refresh.
+struct EnrichmentSnapshot: Codable, Hashable, Sendable {
+    var generatedAt: Date
+    var provenance: String
+    var services: [String: ServiceEnrichment]
+
+    init(generatedAt: Date, provenance: String, services: [String: ServiceEnrichment]) {
+        self.generatedAt = generatedAt
+        self.provenance = provenance
+        self.services = services
+    }
+
+    init(generatedAt: Date, provenance: String, entries: [ServiceEnrichment]) {
+        self.init(generatedAt: generatedAt, provenance: provenance,
+                  services: Dictionary(uniqueKeysWithValues: entries.map { ($0.serviceID, $0) }))
+    }
+
+    subscript(serviceID: String) -> ServiceEnrichment? { services[serviceID] }
+}
+
+struct EnrichmentDiagnostic: Codable, Hashable, Sendable {
+    var serviceID: String
+    var source: EnrichmentSource
+    var freshness: EnrichmentFreshness
+    var message: String
+    var updatedAt: Date?
+}
+
+enum CatalogRouteMode: String, Codable, CaseIterable, Hashable, Sendable {
+    case targeted
+    case lite
+    case full
+}
+
+/// Output of the lossless source-route partition. A fragment may be listed for
+/// several service IDs; unassigned routes carry the complement of their union.
+struct MatchedCatalog: Codable, Hashable, Sendable {
+    var catalog: ServiceCatalog
+    var routesByMode: [CatalogRouteMode: [String: [String]]]
+    var unassignedRoutes: [CatalogRouteMode: [String]]
+    var diagnostics: [EnrichmentDiagnostic]
+    var freshness: EnrichmentFreshness
+
+    func routes(for serviceID: String, mode: CatalogRouteMode) -> [String] {
+        routesByMode[mode]?[serviceID] ?? []
+    }
+}
+
 /// Metadata for one service from the licensed catalog.
 struct CatalogService: Codable, Identifiable, Hashable, Sendable {
     static let defaultSource = "pincetgore/amnezia-app-ru-list"
