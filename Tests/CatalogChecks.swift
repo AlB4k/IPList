@@ -8,11 +8,15 @@ private func check(_ value: @autoclosure () -> Bool, _ message: String) {
 struct CatalogChecks {
     static func main() async throws {
         try testAeroflotFixture()
+        try testCategoryCommentsRequireSupportedHeading()
         try testValidationAndUnknownFields()
+        try testKnownListShapeValidation()
         try await testCollisionAndShrinkGuard()
         try testLegacyCodableDefaults()
         try await testFallbackMetadata()
+        try await testLastSuccessfulCatalogFallback()
         try await testNoFallbackFails()
+        try await testLiveCatalog()
         print("Catalog checks passed")
     }
 
@@ -43,6 +47,35 @@ struct CatalogChecks {
         check(catalog.services.count == 2, "unknown fields must not create services")
     }
 
+    static func testCategoryCommentsRequireSupportedHeading() throws {
+        let ordinary = "services:\n  # an ordinary note\n  - name: Ordinary\n    domains: [ordinary.example]\n"
+        let ordinaryCatalog = try ServiceCatalogParser.parse(ordinary)
+        check(ordinaryCatalog.services[0].category == "Без категории", "ordinary comments must not become categories")
+
+        let missingClosingDivider = "services:\n  # ============================================================\n  # ТРАНСПОРТ, АВТО И КАРШЕРИНГ\n  - name: Missing closing divider\n    domains: [missing.example]\n"
+        let missingCatalog = try ServiceCatalogParser.parse(missingClosingDivider)
+        check(missingCatalog.services[0].category == "Без категории", "incomplete headings must fall back")
+
+        let changedComment = "services:\n  # ============================================================\n  # changed comment\n  # ============================================================\n  - name: Changed\n    domains: [changed.example]\n"
+        let changedCatalog = try ServiceCatalogParser.parse(changedComment)
+        check(changedCatalog.services[0].category == "Без категории", "unsupported headings must fall back")
+
+        let supportedThenOrdinary = """
+        services:
+          # ============================================================
+          # ТРАНСПОРТ, АВТО И КАРШЕРИНГ
+          # ============================================================
+          - name: Supported
+            domains: [supported.example]
+          # ordinary note
+          - name: Ordinary after heading
+            domains: [ordinary-after.example]
+        """
+        let mixedCatalog = try ServiceCatalogParser.parse(supportedThenOrdinary)
+        check(mixedCatalog.services[0].category == "Транспорт, авто и каршеринг", "supported heading")
+        check(mixedCatalog.services[1].category == "Без категории", "ordinary comment resets category")
+    }
+
     static func testValidationAndUnknownFields() throws {
         do {
             _ = try ServiceCatalogParser.parse("services:\n  - name: x\n    asn: [-1]\n    domains: [x.ru]\n")
@@ -61,6 +94,24 @@ struct CatalogChecks {
         let unknown = "services:\n  - name: one\n    ignored:\n      - not-a-domain\n    domains:\n      - one.example\n"
         let parsed = try ServiceCatalogParser.parse(unknown)
         check(parsed.services[0].domains == ["one.example"], "unknown array must not shift state")
+    }
+
+    static func testKnownListShapeValidation() throws {
+        let scalar = "services:\n  - name: scalar\n    domains: scalar.example\n"
+        do {
+            _ = try ServiceCatalogParser.parse(scalar)
+            preconditionFailure("scalar known list field must be rejected")
+        } catch let error as ServiceCatalogError {
+            if case .malformed = error {} else { preconditionFailure("wrong scalar error: \(error)") }
+        }
+
+        let emptyBlock = "services:\n  - name: empty\n    domains:\n  - name: next\n    domains: [next.example]\n"
+        do {
+            _ = try ServiceCatalogParser.parse(emptyBlock)
+            preconditionFailure("opened empty block list must be rejected")
+        } catch let error as ServiceCatalogError {
+            if case .malformed = error {} else { preconditionFailure("wrong empty-list error: \(error)") }
+        }
     }
 
     static func testCollisionAndShrinkGuard() async throws {
@@ -110,6 +161,26 @@ struct CatalogChecks {
         check(result.services.first?.name == "cached", "fallback data")
     }
 
+    static func testLastSuccessfulCatalogFallback() async throws {
+        let remote = Data("services:\n  - name: remote\n    domains: [remote.example]\n".utf8)
+        let callerFallback = Data("services:\n  - name: caller\n    domains: [caller.example]\n".utf8)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [FlakyURLProtocol.self]
+        FlakyURLProtocol.body = remote
+        FlakyURLProtocol.shouldFail = false
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let loader = ServiceCatalogLoader(session: session)
+        let first = try await loader.load(remoteURL: URL(string: "https://example.test/catalog.yaml")!)
+        check(first.freshness == .remote && first.services.first?.name == "remote", "remote success")
+
+        FlakyURLProtocol.shouldFail = true
+        let second = try await loader.load(remoteURL: URL(string: "https://example.test/catalog.yaml")!, fallbackData: callerFallback)
+        check(second.freshness == .cached, "last-successful freshness")
+        check(second.services.first?.name == "remote", "last-successful catalog precedes caller fallback")
+        check(second.sourceURL == "last-successful-catalog", "last-successful source metadata")
+    }
+
     static func testNoFallbackFails() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [FailingURLProtocol.self]
@@ -121,6 +192,19 @@ struct CatalogChecks {
         } catch let error as ServiceCatalogError {
             check(error.errorDescription?.isEmpty == false, "fallback error should be actionable")
         }
+    }
+
+    static func testLiveCatalog() async throws {
+        guard ProcessInfo.processInfo.environment["IPLIST_LIVE_TEST"] == "1" else { return }
+        let url = URL(string: "https://raw.githubusercontent.com/pincetgore/amnezia-app-ru-list/main/config.yaml")!
+        let catalog = try await ServiceCatalogLoader().load(remoteURL: url)
+        check(catalog.freshness == .remote, "live catalog freshness")
+        check(catalog.services.count >= 200, "live catalog service count")
+        let aeroflot = try require(catalog.services.first { $0.name == "Аэрофлот" })
+        check(aeroflot.category == "Транспорт, авто и каршеринг", "live Aeroflot category")
+        check(aeroflot.domains.contains("aeroflot.ru"), "live Aeroflot domain")
+        check(aeroflot.domains.contains("api.aeroflot.ru"), "live Aeroflot API domain")
+        check(aeroflot.asn.contains(34571), "live Aeroflot ASN")
     }
 }
 
@@ -143,6 +227,24 @@ private final class StaticURLProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+private final class FlakyURLProtocol: URLProtocol {
+    static var body = Data()
+    static var shouldFail = false
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        if Self.shouldFail {
+            client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+            return
+        }
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Self.body)

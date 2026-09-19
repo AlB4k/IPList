@@ -115,7 +115,9 @@ enum ServiceCatalogParser {
         var currentList: (field: ListField, indent: Int)?
         var servicesIndent: Int?
         var category = "Без категории"
-        var pendingCategory: String?
+        var dividerOpened = false
+        var categoryCandidate: String?
+        var closingDividerExpected = false
         var insideServices = false
         var totalDomains = 0
         var totalRanges = 0
@@ -144,6 +146,24 @@ enum ServiceCatalogParser {
             }
         }
 
+        func closeOpenListIfNeeded(line: Int) throws {
+            guard let list = currentList else { return }
+            guard let builder = current else {
+                currentList = nil
+                return
+            }
+            let hasItems: Bool
+            switch list.field {
+            case .domains: hasItems = !builder.domains.isEmpty
+            case .asn: hasItems = !builder.asn.isEmpty
+            case .ranges: hasItems = !builder.ranges.isEmpty
+            }
+            guard hasItems else {
+                throw ServiceCatalogError.malformed(line: line, reason: "пустой список \(list.field)")
+            }
+            currentList = nil
+        }
+
         for (index, sourceLine) in lines.enumerated() {
             let lineNumber = index + 1
             let indent = sourceLine.prefix { $0 == " " || $0 == "\t" }.count
@@ -152,9 +172,29 @@ enum ServiceCatalogParser {
 
             if insideServices, trimmed.hasPrefix("#"), indent <= (servicesIndent ?? 2) {
                 let comment = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !comment.isEmpty && !comment.allSatisfy({ $0 == "=" || $0 == "-" || $0 == "_" }) {
-                    pendingCategory = normalizeCategory(comment)
+                if isDivider(comment) {
+                    if closingDividerExpected, let candidate = categoryCandidate {
+                        category = candidate
+                        categoryCandidate = nil
+                        closingDividerExpected = false
+                        dividerOpened = false
+                    } else {
+                        category = "Без категории"
+                        categoryCandidate = nil
+                        closingDividerExpected = false
+                        dividerOpened = true
+                    }
+                } else if dividerOpened, isSupportedCategoryHeading(comment) {
+                    categoryCandidate = normalizeCategory(comment)
+                    dividerOpened = false
+                    closingDividerExpected = true
+                } else {
+                    category = "Без категории"
+                    categoryCandidate = nil
+                    dividerOpened = false
+                    closingDividerExpected = false
                 }
+                try closeOpenListIfNeeded(line: lineNumber)
                 currentList = nil
                 continue
             }
@@ -182,10 +222,9 @@ enum ServiceCatalogParser {
                     continue
                 }
 
+                try closeOpenListIfNeeded(line: lineNumber)
                 if let previous = current { try finish(previous) }
                 servicesIndent = servicesIndent ?? indent
-                category = pendingCategory ?? category
-                pendingCategory = nil
                 current = Builder(line: lineNumber, category: category)
                 currentList = nil
                 let rest = body == "-" ? "" : String(body.dropFirst()).trimmingCharacters(in: .whitespaces)
@@ -197,19 +236,25 @@ enum ServiceCatalogParser {
 
             guard current != nil, let pair = keyAndValue(body), let knownIndent = servicesIndent,
                   indent <= knownIndent + 2 else {
+                try closeOpenListIfNeeded(line: lineNumber)
                 currentList = nil
                 continue
             }
 
+            try closeOpenListIfNeeded(line: lineNumber)
             switch pair.key {
             case "name":
                 current?.name = scalarValue(pair.value)
                 currentList = nil
             case "domains", "asn", "ip_ranges":
                 let field: ListField = pair.key == "domains" ? .domains : (pair.key == "asn" ? .asn : .ranges)
-                let values = try inlineValues(pair.value, line: lineNumber)
-                if values != nil {
-                    if let values, var builder = current {
+                if pair.value.isEmpty {
+                    currentList = (field, indent)
+                } else {
+                    guard let values = try inlineValues(pair.value, line: lineNumber) else {
+                        throw ServiceCatalogError.malformed(line: lineNumber, reason: "поле \(pair.key) должно быть массивом")
+                    }
+                    if var builder = current {
                         for value in values {
                             try append(scalar: value, to: &builder, field: field, line: lineNumber, limits: limits,
                                        domains: &totalDomains, ranges: &totalRanges, asns: &totalASNs)
@@ -217,8 +262,6 @@ enum ServiceCatalogParser {
                         current = builder
                     }
                     currentList = nil
-                } else {
-                    currentList = (field, indent)
                 }
             default:
                 // Unknown keys, including their nested lists, are intentionally
@@ -226,6 +269,7 @@ enum ServiceCatalogParser {
                 currentList = nil
             }
         }
+        try closeOpenListIfNeeded(line: lines.count)
         if let previous = current { try finish(previous) }
         guard !services.isEmpty else { throw ServiceCatalogError.emptyCatalog }
         return ServiceCatalog(services: services)
@@ -348,6 +392,16 @@ enum ServiceCatalogParser {
         guard let first = normalized.first else { return "Без категории" }
         return String(first).uppercased() + String(normalized.dropFirst())
     }
+
+    private static func isDivider(_ value: String) -> Bool {
+        !value.isEmpty && value.allSatisfy { $0 == "=" || $0 == "-" || $0 == "_" }
+    }
+
+    private static func isSupportedCategoryHeading(_ value: String) -> Bool {
+        let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, clean == clean.uppercased(), !clean.contains(":") else { return false }
+        return clean.unicodeScalars.contains { CharacterSet.letters.contains($0) }
+    }
 }
 
 final class ServiceCatalogLoader: @unchecked Sendable {
@@ -374,6 +428,13 @@ final class ServiceCatalogLoader: @unchecked Sendable {
             lastSuccessfulCatalog = candidate
             return candidate
         } catch {
+            if let lastSuccessfulCatalog {
+                var cached = lastSuccessfulCatalog
+                cached.freshness = .cached
+                cached.sourceURL = "last-successful-catalog"
+                cached.loadedAt = Date()
+                return cached
+            }
             if let fallbackData {
                 do {
                     var candidate = try ServiceCatalogParser.parse(fallbackData)

@@ -17,3 +17,10 @@ for source in "${production_sources[@]}"; do
 done
 swiftc -parse-as-library "${available_sources[@]}" Tests/CoreChecks.swift -o .build/checks/core-checks
 .build/checks/core-checks
+
+catalog_sources=(
+  Sources/IPList/CatalogModels.swift
+  Sources/IPList/ServiceCatalogLoader.swift
+)
+swiftc -parse-as-library "${catalog_sources[@]}" Tests/CatalogChecks.swift -o .build/checks/catalog-checks
+.build/checks/catalog-checks
