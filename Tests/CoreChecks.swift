@@ -3,10 +3,27 @@ func XCTAssertEqual<T: Equatable>(_ a: T, _ b: T) { precondition(a == b, "Expect
 func XCTAssertTrue(_ value: Bool) { precondition(value) }
 func XCTAssertNil<T>(_ value: T?) { precondition(value == nil) }
 func XCTAssertGreaterThan(_ a: Int, _ b: Int) { precondition(a > b) }
+func XCTAssertThrows<T>(_ expression: @autoclosure () throws -> T, matching predicate: (Error) -> Bool) {
+    do {
+        _ = try expression()
+        preconditionFailure("Expected error")
+    } catch {
+        precondition(predicate(error), "Unexpected error: \(error)")
+    }
+}
+func addresses(in routes: [String]) -> Set<UInt32> {
+    var result: Set<UInt32> = []
+    for route in routes {
+        guard let network = IPv4Network(route) else { continue }
+        let count = UInt32(network.addressCount)
+        for offset in 0..<count { result.insert(network.network + offset) }
+    }
+    return result
+}
 @main struct CoreTests {
     static func main() async throws {
         let tests = CoreTests()
-        tests.testIPv4AndCIDR(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testCatalogDefaults(); tests.testManualGroups(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
+        tests.testIPv4AndCIDR(); tests.testIPv4NetworkSetOperations(); tests.testIPv4NetworkReferenceOracle(); tests.testAllowedIPsFormattingDeduplicatesExistingCoverage(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testCatalogDefaults(); tests.testManualGroups(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
         print("All checks passed")
     }
     func testIPv4AndCIDR() {
@@ -15,13 +32,62 @@ func XCTAssertGreaterThan(_ a: Int, _ b: Int) { precondition(a > b) }
         XCTAssertEqual(normalizeIP("1.2.3.4/32"), "1.2.3.4")
         for bad in ["", "1.2.3.999", "example.com", "::1", "1.2.3.4/33", "1.2.3.4/", "1.2.3.4/8/9"] { XCTAssertNil(normalizeIP(bad)) }
     }
+    func testIPv4NetworkSetOperations() {
+        let source = IPv4Network("10.0.0.0/24")!
+        let child = IPv4Network("10.0.0.7/32")!
+        let disjoint = IPv4Network("10.0.1.0/24")!
+        XCTAssertTrue(source.contains(child))
+        XCTAssertTrue(source.intersects(child))
+        XCTAssertTrue(!source.intersects(disjoint))
+        XCTAssertEqual(source.subtracting(IPv4Network("10.0.0.64/26")!).map(\.description),
+                       ["10.0.0.0/26", "10.0.0.128/25"])
+        XCTAssertEqual(collapseIPv4(["10.0.0.0/25", "10.0.0.128/25", "10.0.0.4/32"]),
+                       ["10.0.0.0/24"])
+        XCTAssertEqual(collapseIPv4(["10.0.0.0/24"]),
+                       collapseIPv4(["10.0.0.0/25", "10.0.0.128/25"]))
+        XCTAssertEqual(collapseIPv4(["10.0.0.7/32", "10.0.0.7", "10.0.0.0/24"]),
+                       ["10.0.0.0/24"])
+    }
+    func testIPv4NetworkReferenceOracle() {
+        for invalid in ["", "1.2.3.4/33", "1.2.3.4/", "1.2.3.4/-1", "1.2.3/24", "::1/128"] {
+            XCTAssertNil(IPv4Network(invalid))
+        }
+        XCTAssertEqual(IPv4Network("203.0.113.3/31")?.description, "203.0.113.2/31")
+        XCTAssertEqual(IPv4Network("203.0.113.3/32")?.description, "203.0.113.3/32")
+        XCTAssertEqual(IPv4Network("203.0.113.3/0")?.description, "0.0.0.0/0")
+
+        var state: UInt64 = 0xA11CE5EED
+        func next() -> UInt32 {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return UInt32(truncatingIfNeeded: state >> 32)
+        }
+        for _ in 0..<128 {
+            let left = IPv4Network(network: next() & 0xFF, prefix: UInt8(next() % 9 + 24))!
+            let right = IPv4Network(network: next() & 0xFF, prefix: UInt8(next() % 9 + 24))!
+            let collapsed = collapseIPv4([left.description, right.description])
+            XCTAssertEqual(addresses(in: collapsed), addresses(in: [left.description, right.description]))
+            XCTAssertEqual(addresses(in: left.subtracting(right).map(\.description)),
+                           addresses(in: [left.description]).subtracting(addresses(in: [right.description])))
+            XCTAssertEqual(left.intersection(right).map { addresses(in: [$0.description]) } ?? [],
+                           addresses(in: [left.description]).intersection(addresses(in: [right.description])))
+        }
+        XCTAssertThrows(try IPv4Network("0.0.0.0/0")!.subtracting(IPv4Network("0.0.0.0/32")!, limit: 1)) {
+            ($0 as? IPv4NetworkError) == .fragmentLimitExceeded(limit: 1)
+        }
+    }
+    func testAllowedIPsFormattingDeduplicatesExistingCoverage() {
+        XCTAssertEqual(
+            allowedIPsLine(["1.1.1.1", "1.1.1.1/32", "192.0.2.1/24", "192.0.2.9/32"]),
+            "AllowedIPs = 1.1.1.1/32, 192.0.2.0/24"
+        )
+    }
     func testImportAndExport() throws {
         let data = Data("[{\"hostname\":\"example.com\",\"ip\":\"1.2.3.4\",\"ips\":[\"1.2.3.5\"]},{\"hostname\":\"192.0.2.123/24\",\"ip\":\"\",\"ips\":[]}]".utf8)
         let entries = try JSONDecoder().decode([AmneziaEntry].self, from: data)
         let ips = Set(entries.flatMap(\.addresses))
         XCTAssertEqual(ips, ["1.2.3.4", "1.2.3.5", "192.0.2.0/24"])
         let exported = try JSONDecoder().decode([AmneziaEntry].self, from: exportData(ips))
-        XCTAssertEqual(Set(exported.map(\.hostname)), ips)
+        XCTAssertEqual(Set(exported.map(\.hostname)), ["1.2.3.4/31", "192.0.2.0/24"])
         XCTAssertTrue(exported.allSatisfy { $0.ip == "" && $0.ips == [] })
     }
     func testSelectionAndDeduplication() {

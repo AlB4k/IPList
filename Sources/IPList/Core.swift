@@ -591,7 +591,3 @@ actor CatalogLoader {
         }
     }
 }
-func exportData(_ addresses: Set<String>) throws -> Data {
-    let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-    return try encoder.encode(addresses.sorted().map { AmneziaEntry(hostname: $0, ip: "", ips: []) })
-}

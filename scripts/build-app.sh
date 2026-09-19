@@ -4,9 +4,11 @@ cd "${0:A:h}/.."
 swift build -c release
 APP="$PWD/dist/IPList.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/Resources/ThirdParty"
 BIN_DIR="$(swift build -c release --show-bin-path)"
 cp "$BIN_DIR/IPList" "$APP/Contents/MacOS/IPList"
 cp "$PWD/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+cp "$PWD"/Resources/ThirdParty/* "$APP/Contents/Resources/ThirdParty/"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
