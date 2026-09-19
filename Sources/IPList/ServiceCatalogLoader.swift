@@ -431,8 +431,6 @@ final class ServiceCatalogLoader: @unchecked Sendable {
             if let lastSuccessfulCatalog {
                 var cached = lastSuccessfulCatalog
                 cached.freshness = .cached
-                cached.sourceURL = "last-successful-catalog"
-                cached.loadedAt = Date()
                 return cached
             }
             if let fallbackData {

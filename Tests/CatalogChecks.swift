@@ -173,12 +173,14 @@ struct CatalogChecks {
         let loader = ServiceCatalogLoader(session: session)
         let first = try await loader.load(remoteURL: URL(string: "https://example.test/catalog.yaml")!)
         check(first.freshness == .remote && first.services.first?.name == "remote", "remote success")
+        check(first.loadedAt != nil, "remote timestamp")
 
         FlakyURLProtocol.shouldFail = true
         let second = try await loader.load(remoteURL: URL(string: "https://example.test/catalog.yaml")!, fallbackData: callerFallback)
         check(second.freshness == .cached, "last-successful freshness")
         check(second.services.first?.name == "remote", "last-successful catalog precedes caller fallback")
-        check(second.sourceURL == "last-successful-catalog", "last-successful source metadata")
+        check(second.sourceURL == first.sourceURL, "last-successful source provenance")
+        check(second.loadedAt == first.loadedAt, "last-successful timestamp is preserved")
     }
 
     static func testNoFallbackFails() async throws {
