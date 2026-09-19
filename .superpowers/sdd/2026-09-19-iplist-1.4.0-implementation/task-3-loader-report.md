@@ -21,7 +21,8 @@ The loader enforces an absolute minimum of one service by default (configurable)
 
 - `swiftc -parse-as-library Sources/IPList/CatalogModels.swift Sources/IPList/ServiceCatalogLoader.swift Tests/CatalogChecks.swift -o .build/checks/catalog-checks && .build/checks/catalog-checks` — passed.
 - `swiftc -parse-as-library Sources/IPList/CatalogModels.swift Sources/IPList/ServiceCatalogLoader.swift Sources/IPList/Core.swift Tests/CatalogChecks.swift -o .build/checks/catalog-checks-with-core && .build/checks/catalog-checks-with-core` — passed.
-- `./scripts/test.sh` — passed (`All checks passed`).
+- Standalone deterministic and live catalog checks — passed (`Catalog checks passed` in both modes).
+- `./scripts/test.sh` — currently reaches the parallel Task 2 checks but fails there with `AmneziaWGConfigError.invalidStructure`; the catalog phase passes when run standalone.
 - `swift build` — passed; existing linker search-path warnings remain from the local toolchain setup.
 - `git diff --check` — passed for the implementation commit.
 
@@ -29,4 +30,4 @@ The isolated `Tests/CatalogChecks.swift` covers Aeroflot parsing and category no
 
 ## Gaps and handoff
 
-The live upstream YAML, enrichment snapshot, license file, build-app resource copy, and notices update remain with the separate source-preparation/enrichment tasks. `Tests/CoreChecks.swift` was not edited. `scripts/test.sh` now runs the standalone deterministic catalog harness; after the parallel Task 2 commit landed, the full script passes. Direct catalog checks, the live check with `IPLIST_LIVE_TEST=1`, `./scripts/test.sh`, and `swift build` all pass (with the existing local linker search-path warnings). Enrichment, route matching, migration, and persistence are subsequent tasks.
+The live upstream YAML, enrichment snapshot, license file, build-app resource copy, and notices update remain with the separate source-preparation/enrichment tasks. `Tests/CoreChecks.swift` was not edited. `scripts/test.sh` now runs the standalone deterministic catalog harness. Direct deterministic/live catalog checks and `swift build` pass (with the existing local linker search-path warnings); the full script is blocked by the parallel Task 2 runtime failure `AmneziaWGConfigError.invalidStructure`. Enrichment, route matching, migration, and persistence are subsequent tasks.
