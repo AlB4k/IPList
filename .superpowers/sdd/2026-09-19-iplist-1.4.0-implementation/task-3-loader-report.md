@@ -1,6 +1,6 @@
 # Task 3 loader implementation report
 
-Implementation commits: `4eba7852fcd046f3c468c4f50141f1514631c4a4` (`feat: load licensed service metadata catalog`), `26ad6a0a0888e1f02b3b635b3fd38b9621f791b9` (`fix: preserve legacy catalog decoding`), and `3f274e63472685fc3be855f67483fb243bffc853` (`fix: harden service catalog loading`).
+Implementation commits: `4eba7852fcd046f3c468c4f50141f1514631c4a4` (`feat: load licensed service metadata catalog`), `26ad6a0a0888e1f02b3b635b3fd38b9621f791b9` (`fix: preserve legacy catalog decoding`), `3f274e63472685fc3be855f67483fb243bffc853` (`fix: harden service catalog loading`), and `c2254f9ee9b22586c40c6b5ccdf6fdc32a25586b` (`fix: preserve catalog cache provenance`).
 
 ## Interfaces
 
@@ -15,7 +15,7 @@ Stable IDs use the source identifier `pincetgore/amnezia-app-ru-list` and a norm
 
 The parser enforces a 4 MiB input limit, 2,000 services, 20,000 domains, 20,000 explicit ranges, 20,000 ASN entries, and 512 UTF-8 bytes per text/item field. It rejects empty catalogs, empty service names, services with no metadata, invalid ASN values, invalid IPv4 ranges, scalar known-list fields, opened empty block lists, malformed bounded arrays, and stable-ID collisions. IPv4 host bits are normalized while parsing ranges. Category metadata is recognized only in the upstream divider / uppercase-heading / divider shape; ordinary, incomplete, or unsupported comments assign the next service to `Без категории`.
 
-The loader enforces an absolute minimum of one service by default (configurable) and rejects a candidate below 50% of the previous successful catalog by default (also configurable). A valid fallback is only published after the same validation.
+The loader enforces an absolute minimum of one service by default (configurable) and rejects a candidate below 50% of the previous successful catalog by default (also configurable). A valid fallback is only published after the same validation. Returning the last successful catalog marks it cached while preserving its original source URL and `loadedAt` timestamp.
 
 ## Verification
 
@@ -25,7 +25,7 @@ The loader enforces an absolute minimum of one service by default (configurable)
 - `swift build` — passed; existing linker search-path warnings remain from the local toolchain setup.
 - `git diff --check` — passed for the implementation commit.
 
-The isolated `Tests/CatalogChecks.swift` covers Aeroflot parsing and category normalization, unknown-field state isolation, category-comment regressions, invalid ASN/range rejection, scalar and empty-list rejection, stable-ID collisions, relative shrink rejection, legacy Codable defaults, remote failure with cached fallback, last-successful-catalog precedence, remote failure without fallback, and the environment-gated live source check.
+The isolated `Tests/CatalogChecks.swift` covers Aeroflot parsing and category normalization, unknown-field state isolation, category-comment regressions, invalid ASN/range rejection, scalar and empty-list rejection, stable-ID collisions, relative shrink rejection, legacy Codable defaults, remote failure with cached fallback, last-successful-catalog precedence and timestamp/provenance preservation, remote failure without fallback, and the environment-gated live source check.
 
 ## Gaps and handoff
 
