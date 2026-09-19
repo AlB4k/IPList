@@ -4,6 +4,7 @@ Commit: `54ad3f5aafce1c478b72a1a16d1ee47f27233bc2` (`feat: safely enrich Amnezia
 
 ## Fix round 1
 
+- Commit: `12355d1a171a5d611191f6ca9f122a23efb95f91` (`fix: preserve AmneziaWG config formatting`).
 - Preserves the complete trailing whitespace and `#`/`;` comment suffix of the first rendered `AllowedIPs` line.
 - Treats only an entire trimmed `[Interface]` or `[Peer]` line as a section header, so opaque key/value settings ending in `]` remain unchanged.
 - Added LF and CRLF regressions for both comment styles and the opaque-value case.
