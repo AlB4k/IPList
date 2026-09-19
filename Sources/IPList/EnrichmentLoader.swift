@@ -110,7 +110,15 @@ private func DNSServiceRefDeallocate(_ reference: OpaquePointer?)
 private let dnsServiceGetAddrInfoCallback: DNSServiceGetAddrInfoReply = { _, flags, _, errorCode, _, address, _, context in
     guard let context else { return }
     Unmanaged<DNSAddressQuery>.fromOpaque(context).takeUnretainedValue()
-        .receive(flags: flags, errorCode: errorCode, address: address)
+        .receive(flags: flags, errorCode: errorCode, address: systemDNSIPv4Address(address))
+}
+
+func systemDNSIPv4Address(_ address: UnsafePointer<sockaddr>?) -> String? {
+    guard let address, address.pointee.sa_family == sa_family_t(AF_INET) else { return nil }
+    return address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { pointer in
+        let value = UInt32(bigEndian: pointer.pointee.sin_addr.s_addr)
+        return IPv4Network(network: value, prefix: 32)?.description
+    }
 }
 
 private final class DNSAddressQuery: @unchecked Sendable {
@@ -204,20 +212,14 @@ private final class DNSAddressQuery: @unchecked Sendable {
         }
     }
 
-    func receive(flags: UInt32, errorCode: Int32, address: UnsafePointer<sockaddr>?) {
+    func receive(flags: UInt32, errorCode: Int32, address: String?) {
         queue.async { [weak self] in
             guard let self, !self.completed else { return }
             guard errorCode == 0 else {
                 self.finish(.failure(EnrichmentError.invalidRIPEStatResponse))
                 return
             }
-            if let address, address.pointee.sa_family == sa_family_t(AF_INET) {
-                let rendered = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { pointer -> String in
-                    let value = UInt32(bigEndian: pointer.pointee.sin_addr.s_addr)
-                    return IPv4Network(network: value, prefix: 32)!.description
-                }
-                self.addresses.insert(rendered)
-            }
+            if let address { self.addresses.insert(address) }
             // kDNSServiceFlagsMoreComing is bit 0. When it is clear, DNS-SD
             // has delivered the complete current answer set for this request.
             if flags & 1 == 0 {
@@ -316,11 +318,12 @@ struct ServiceEnricher: Sendable {
         dns: any DomainResolving,
         asn: any ASNPrefixLoading,
         bundled: EnrichmentSnapshot? = nil,
+        loadsBundledSnapshot: Bool = true,
         limits: EnrichmentLimits = EnrichmentLimits()
     ) {
         self.dns = dns
         self.asn = asn
-        self.bundled = bundled
+        self.bundled = bundled ?? (loadsBundledSnapshot ? EnrichmentSnapshot.bundled() : nil)
         self.limits = limits
     }
 

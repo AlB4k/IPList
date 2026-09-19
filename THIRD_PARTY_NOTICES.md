@@ -16,10 +16,11 @@ SHA-256 включённых файлов:
 
 - `Resources/ThirdParty/pincetgore-config.yaml`: `d22b844be82ef80cbbb305adf5b9308245a97cfc6822c0c45a0d8897ea32b53e`
 - `Resources/ThirdParty/pincetgore-LICENSE`: `89e30247532df2f24ffa96e846f8697222c413cbb1593e6a975fdf5e19955f66`
+- `Resources/ThirdParty/enrichment-snapshot.json`: `b649781862fe0fd7e108554ce1de9302b4710f490cf778e692098a6c8a66935d`
 
 Лицензия: MIT. Текст лицензии включён в `Resources/ThirdParty/pincetgore-LICENSE`.
 
-Снимок обогащения по сервисам (`enrichment-snapshot.json`) здесь не создаётся: его детерминированная генерация относится к Task 4 и требует сетевых DNS/RIPEstat данных с отдельной записью происхождения. Приложение использует каталог как резерв и не выдаёт отсутствующий снимок обогащения за готовые доказательства адресов.
+`enrichment-snapshot.json` получен 2026-09-19 21:49:31 +03:00 из включённого выше `config.yaml` (проверенный SHA-256 указан выше). Генератор `scripts/generate-enrichment-snapshot.swift` использовал системный DNS macOS через `DNSServiceGetAddrInfo` и официальный RIPEstat `announced-prefixes` (`https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS<asn>`), с пределами 8 параллельных запросов, 12 секунд на запрос и 60 секунд на весь запуск. Снимок содержит 275 сервисов: DNS-доказательства есть у 274, префиксы ASN — у 94; 4 неполные записи явно помечены `stale`. В снимок не добавлялись выдуманные адреса; при сопоставлении его доказательства пересекаются с текущими маршрутами источника, а остальная часть остаётся неназначенной.
 
 ### lib4u/amnezia-tunneling-ru
 
@@ -65,10 +66,11 @@ SHA-256 checksums of the bundled files:
 
 - `Resources/ThirdParty/pincetgore-config.yaml`: `d22b844be82ef80cbbb305adf5b9308245a97cfc6822c0c45a0d8897ea32b53e`
 - `Resources/ThirdParty/pincetgore-LICENSE`: `89e30247532df2f24ffa96e846f8697222c413cbb1593e6a975fdf5e19955f66`
+- `Resources/ThirdParty/enrichment-snapshot.json`: `b649781862fe0fd7e108554ce1de9302b4710f490cf778e692098a6c8a66935d`
 
 License: MIT. The license text is included in `Resources/ThirdParty/pincetgore-LICENSE`.
 
-No `enrichment-snapshot.json` is included here: deterministic per-service enrichment generation belongs to Task 4 and requires network DNS/RIPEstat data with separately recorded provenance. The app uses the catalog as a fallback and does not treat a missing enrichment snapshot as address evidence.
+`enrichment-snapshot.json` was generated on 2026-09-19 21:49:31 +03:00 from the bundled `config.yaml` above (whose SHA-256 is verified above). `scripts/generate-enrichment-snapshot.swift` used macOS system DNS through `DNSServiceGetAddrInfo` and the official RIPEstat announced-prefixes endpoint (`https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS<asn>`), with 8 concurrent requests, a 12-second request limit, and a 60-second overall limit. The snapshot contains 275 services: 274 have DNS evidence and 94 have ASN prefixes; 4 incomplete entries are explicitly marked `stale`. No addresses were invented; matching intersects its evidence with current source routes and leaves the remainder unassigned.
 
 ### lib4u/amnezia-tunneling-ru
 

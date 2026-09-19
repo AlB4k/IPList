@@ -83,7 +83,27 @@ struct EnrichmentSnapshot: Codable, Hashable, Sendable {
     }
 
     subscript(serviceID: String) -> ServiceEnrichment? { services[serviceID] }
+
+    static func decodeBundled(_ data: Data) throws -> EnrichmentSnapshot {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        return try decoder.decode(EnrichmentSnapshot.self, from: data)
+    }
+
+    static func bundled() -> EnrichmentSnapshot? {
+        let bundles = [Bundle.main, Bundle(for: EnrichmentBundleMarker.self)]
+        for bundle in bundles {
+            if let url = bundle.url(forResource: "enrichment-snapshot", withExtension: "json", subdirectory: "ThirdParty"),
+               let data = try? Data(contentsOf: url),
+               let snapshot = try? decodeBundled(data) {
+                return snapshot
+            }
+        }
+        return nil
+    }
 }
+
+private final class EnrichmentBundleMarker: NSObject {}
 
 struct EnrichmentDiagnostic: Codable, Hashable, Sendable {
     var serviceID: String

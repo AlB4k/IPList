@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 private func check(_ value: @autoclosure () -> Bool, _ message: String) {
     precondition(value(), message)
@@ -118,7 +119,9 @@ struct EnrichmentChecks {
         try await testExpiredEvidenceIsRefreshed()
         try await testFailedRefreshKeepsLastSuccessfulEvidence()
         try await testBundledEvidenceBootstrapsCleanInstall()
+        try testBundledSnapshotPreservesProvenance()
         try await testRIPEStatUsesAnnouncedPrefixesEndpoint()
+        testDNSCallbackCopiesIPv4BeforeReturning()
         try await testLiveSystemDNSResolver()
         try await testRefreshHonorsRequestConcurrencyLimit()
         try await testExpiredRefreshUsesDeadlineAndKeepsCache()
@@ -258,6 +261,16 @@ struct EnrichmentChecks {
         check(asnRequests.isEmpty, "bundled ASN avoids first-run request")
     }
 
+    // This catches a bundled-resource path that drops the provenance or
+    // per-source timestamps needed to decide whether clean-install evidence is stale.
+    private static func testBundledSnapshotPreservesProvenance() throws {
+        let data = Data(#"{"generatedAt":1700000000,"provenance":"system DNS + RIPEstat","services":{"bundled":{"serviceID":"bundled","dnsAddresses":["192.0.2.42"],"asnPrefixes":["192.0.2.0/24"],"dnsUpdatedAt":1700000000,"asnUpdatedAt":1700000000,"freshness":"bundled"}}}"#.utf8)
+        let snapshot = try EnrichmentSnapshot.decodeBundled(data)
+        check(snapshot.provenance == "system DNS + RIPEstat", "bundled provenance")
+        check(snapshot["bundled"]?.freshness == .bundled, "bundled freshness")
+        check(snapshot["bundled"]?.dnsUpdatedAt == Date(timeIntervalSince1970: 1_700_000_000), "bundled timestamp")
+    }
+
     // This catches a client that substitutes a different ASN data source or
     // includes IPv6/malformed strings in an IPv4 route-matching result.
     private static func testRIPEStatUsesAnnouncedPrefixesEndpoint() async throws {
@@ -280,6 +293,19 @@ struct EnrichmentChecks {
         guard ProcessInfo.processInfo.environment["IPLIST_LIVE_TEST"] == "1" else { return }
         let addresses = try await SystemDNSResolver().ipv4Addresses(for: "aeroflot.ru", timeout: 12)
         check(!addresses.isEmpty, "system DNS resolves Aeroflot without public DoH")
+    }
+
+    // This catches callback handling that retains DNS-SD's temporary sockaddr
+    // pointer and reads it later on another queue.
+    private static func testDNSCallbackCopiesIPv4BeforeReturning() {
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = UInt32(0xD4C1990E).bigEndian
+        let rendered = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { systemDNSIPv4Address($0) }
+        }
+        check(rendered == "212.193.153.14/32", "callback sockaddr is copied while valid")
     }
 
     // This catches sequential fan-out: a large catalog must use the bounded
