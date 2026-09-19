@@ -41,6 +41,11 @@ struct ServiceEnrichment: Codable, Hashable, Sendable {
     var serviceID: String
     var dnsAddresses: [String]
     var asnPrefixes: [String]
+    /// Canonical inputs that produced the cached DNS evidence.  Fresh data is
+    /// reusable only when these exactly match the current catalog inputs.
+    var dnsDomains: [String]
+    /// Canonical inputs that produced the cached RIPEstat evidence.
+    var asnNumbers: [Int]
     var dnsUpdatedAt: Date?
     var asnUpdatedAt: Date?
     var freshness: EnrichmentFreshness
@@ -49,6 +54,8 @@ struct ServiceEnrichment: Codable, Hashable, Sendable {
         serviceID: String,
         dnsAddresses: [String] = [],
         asnPrefixes: [String] = [],
+        dnsDomains: [String] = [],
+        asnNumbers: [Int] = [],
         dnsUpdatedAt: Date? = nil,
         asnUpdatedAt: Date? = nil,
         freshness: EnrichmentFreshness = .fresh
@@ -58,9 +65,44 @@ struct ServiceEnrichment: Codable, Hashable, Sendable {
         // decoding remains usable in the lightweight catalog check harness.
         self.dnsAddresses = Array(Set(dnsAddresses)).sorted()
         self.asnPrefixes = Array(Set(asnPrefixes)).sorted()
+        self.dnsDomains = Array(Set(dnsDomains)).sorted()
+        self.asnNumbers = Array(Set(asnNumbers)).sorted()
         self.dnsUpdatedAt = dnsUpdatedAt
         self.asnUpdatedAt = asnUpdatedAt
         self.freshness = freshness
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case serviceID, dnsAddresses, asnPrefixes, dnsDomains, asnNumbers, dnsUpdatedAt, asnUpdatedAt, freshness
+    }
+
+    /// Snapshots from before cache identity was introduced decode safely but
+    /// have empty input identities, which causes a refresh rather than reusing
+    /// unknown evidence as if it matched the current catalog.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            serviceID: try container.decode(String.self, forKey: .serviceID),
+            dnsAddresses: try container.decodeIfPresent([String].self, forKey: .dnsAddresses) ?? [],
+            asnPrefixes: try container.decodeIfPresent([String].self, forKey: .asnPrefixes) ?? [],
+            dnsDomains: try container.decodeIfPresent([String].self, forKey: .dnsDomains) ?? [],
+            asnNumbers: try container.decodeIfPresent([Int].self, forKey: .asnNumbers) ?? [],
+            dnsUpdatedAt: try container.decodeIfPresent(Date.self, forKey: .dnsUpdatedAt),
+            asnUpdatedAt: try container.decodeIfPresent(Date.self, forKey: .asnUpdatedAt),
+            freshness: try container.decodeIfPresent(EnrichmentFreshness.self, forKey: .freshness) ?? .fresh
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(serviceID, forKey: .serviceID)
+        try container.encode(dnsAddresses, forKey: .dnsAddresses)
+        try container.encode(asnPrefixes, forKey: .asnPrefixes)
+        try container.encode(dnsDomains, forKey: .dnsDomains)
+        try container.encode(asnNumbers, forKey: .asnNumbers)
+        try container.encodeIfPresent(dnsUpdatedAt, forKey: .dnsUpdatedAt)
+        try container.encodeIfPresent(asnUpdatedAt, forKey: .asnUpdatedAt)
+        try container.encode(freshness, forKey: .freshness)
     }
 }
 
@@ -87,7 +129,13 @@ struct EnrichmentSnapshot: Codable, Hashable, Sendable {
     static func decodeBundled(_ data: Data) throws -> EnrichmentSnapshot {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .secondsSince1970
-        return try decoder.decode(EnrichmentSnapshot.self, from: data)
+        var snapshot = try decoder.decode(EnrichmentSnapshot.self, from: data)
+        snapshot.services = snapshot.services.mapValues { evidence in
+            var evidence = evidence
+            if evidence.freshness == .fresh { evidence.freshness = .bundled }
+            return evidence
+        }
+        return snapshot
     }
 
     static func bundled() -> EnrichmentSnapshot? {

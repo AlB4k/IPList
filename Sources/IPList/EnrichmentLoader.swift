@@ -10,32 +10,67 @@ protocol ASNPrefixLoading: Sendable {
     func announcedPrefixes(for asn: Int, timeout: TimeInterval) async throws -> [String]
 }
 
+private func canonicalDomains(_ values: [String]) -> [String] {
+    Array(Set(values.compactMap { value -> String? in
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        return normalized.isEmpty ? nil : normalized
+    })).sorted()
+}
+
+private func canonicalASNs(_ values: [Int]) -> [Int] {
+    Array(Set(values.filter { $0 > 0 })).sorted()
+}
+
 /// Official RIPEstat announced-prefixes client. It receives ASN identifiers
 /// only; manually entered addresses are never sent to this endpoint.
 struct RIPEStatASNPrefixLoader: ASNPrefixLoading, Sendable {
+    static let maximumResponseBytes = 4 * 1_024 * 1_024
+    static let maximumPrefixes = 100_000
+    static let observationPolicy = "explicit one-hour RIPEstat interval; only timelines covering query_endtime"
+
     private let session: URLSession
     private let endpoint: URL
+    private let observationTime: Date
+    private let observationWindow: TimeInterval
+    private let maximumResponseBytes: Int
+    private let maximumPrefixCount: Int
 
     init(
         session: URLSession = .shared,
-        endpoint: URL = URL(string: "https://stat.ripe.net/data/announced-prefixes/data.json")!
+        endpoint: URL = URL(string: "https://stat.ripe.net/data/announced-prefixes/data.json")!,
+        observationTime: Date = Date(),
+        observationWindow: TimeInterval = 60 * 60,
+        maximumResponseBytes: Int = RIPEStatASNPrefixLoader.maximumResponseBytes,
+        maximumPrefixCount: Int = RIPEStatASNPrefixLoader.maximumPrefixes
     ) {
         self.session = session
         self.endpoint = endpoint
+        self.observationTime = observationTime
+        self.observationWindow = max(1, observationWindow)
+        self.maximumResponseBytes = max(1, maximumResponseBytes)
+        self.maximumPrefixCount = max(1, maximumPrefixCount)
     }
 
     func announcedPrefixes(for asn: Int, timeout: TimeInterval) async throws -> [String] {
         guard asn > 0 else { throw EnrichmentError.invalidRIPEStatResponse }
         var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "resource", value: "AS\(asn)")]
+        let observationEnd = Self.renderRIPETime(observationTime)
+        let observationStart = Self.renderRIPETime(observationTime.addingTimeInterval(-observationWindow))
+        components.queryItems = [
+            URLQueryItem(name: "resource", value: "AS\(asn)"),
+            URLQueryItem(name: "starttime", value: observationStart),
+            URLQueryItem(name: "endtime", value: observationEnd)
+        ]
         guard let url = components.url else { throw EnrichmentError.invalidRIPEStatResponse }
         var request = URLRequest(url: url)
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        let data: Data
+        let bytes: URLSession.AsyncBytes
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (bytes, response) = try await session.bytes(for: request)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -44,14 +79,45 @@ struct RIPEStatASNPrefixLoader: ASNPrefixLoading, Sendable {
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             throw EnrichmentError.invalidRIPEStatResponse
         }
+        guard http.expectedContentLength < 0 || http.expectedContentLength <= Int64(maximumResponseBytes) else {
+            throw EnrichmentError.ripeResponseTooLarge
+        }
+        var data = Data()
+        do {
+            for try await byte in bytes {
+                guard data.count < maximumResponseBytes else {
+                    throw EnrichmentError.ripeResponseTooLarge
+                }
+                data.append(byte)
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as EnrichmentError {
+            throw error
+        } catch {
+            throw EnrichmentError.invalidRIPEStatResponse
+        }
         let decoded: RIPEStatResponse
         do {
             decoded = try JSONDecoder().decode(RIPEStatResponse.self, from: data)
         } catch {
             throw EnrichmentError.invalidRIPEStatResponse
         }
+        guard decoded.data.prefixes.count <= maximumPrefixCount else {
+            throw EnrichmentError.tooManyRIPEPrefixes(decoded.data.prefixes.count)
+        }
+        guard let queryEnd = Self.parseRIPETime(decoded.data.queryEndtime) else {
+            throw EnrichmentError.invalidRIPEStatResponse
+        }
         return collapseIPv4(decoded.data.prefixes.compactMap { prefix in
-            IPv4Network(prefix.prefix)?.description
+            guard prefix.timelines.contains(where: { timeline in
+                guard let start = Self.parseRIPETime(timeline.starttime) else { return false }
+                guard start <= queryEnd else { return false }
+                guard let endtime = timeline.endtime else { return true }
+                guard let end = Self.parseRIPETime(endtime) else { return false }
+                return end >= queryEnd
+            }) else { return nil }
+            return IPv4Network(prefix.prefix)?.description
         })
     }
 
@@ -59,12 +125,33 @@ struct RIPEStatASNPrefixLoader: ASNPrefixLoading, Sendable {
         var data: Payload
 
         struct Payload: Decodable {
+            var queryEndtime: String
             var prefixes: [Prefix]
+
+            private enum CodingKeys: String, CodingKey {
+                case queryEndtime = "query_endtime"
+                case prefixes
+            }
         }
 
         struct Prefix: Decodable {
             var prefix: String
+            var timelines: [Timeline]
         }
+
+        struct Timeline: Decodable {
+            var starttime: String
+            var endtime: String?
+        }
+    }
+
+    private static func renderRIPETime(_ date: Date) -> String {
+        date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: false, timeZone: .gmt))
+    }
+
+    private static func parseRIPETime(_ value: String) -> Date? {
+        if let date = try? Date(value, strategy: .iso8601) { return date }
+        return try? Date(value + "Z", strategy: .iso8601)
     }
 }
 
@@ -250,6 +337,8 @@ enum EnrichmentError: Error, LocalizedError, Equatable {
     case fragmentLimitExceeded(Int)
     case deadlineExceeded
     case invalidRIPEStatResponse
+    case ripeResponseTooLarge
+    case tooManyRIPEPrefixes(Int)
 
     var errorDescription: String? {
         switch self {
@@ -259,6 +348,8 @@ enum EnrichmentError: Error, LocalizedError, Equatable {
         case .fragmentLimitExceeded(let limit): return "Превышен предел фрагментов маршрутов: \(limit)"
         case .deadlineExceeded: return "Превышено общее время обогащения"
         case .invalidRIPEStatResponse: return "RIPEstat вернул ответ без объявленных IPv4-префиксов"
+        case .ripeResponseTooLarge: return "Ответ RIPEstat превышает 4 МиБ"
+        case .tooManyRIPEPrefixes(let count): return "RIPEstat вернул слишком много префиксов: \(count)"
         }
     }
 }
@@ -342,24 +433,40 @@ struct ServiceEnricher: Sendable {
 
         for service in catalog.services {
             let previous = base?[service.id]
-            if service.domains.isEmpty {
-                dnsResults[service.id] = preserved(previous?.dnsAddresses, updatedAt: previous?.dnsUpdatedAt,
-                                                   freshness: previous?.freshness ?? .fresh)
-            } else if let previous, isFresh(previous.dnsUpdatedAt, now: now) {
+            let dnsInputs = canonicalDomains(service.domains)
+            let asnInputs = canonicalASNs(service.asn)
+            if dnsInputs.isEmpty {
+                dnsResults[service.id] = retired(
+                    serviceID: service.id,
+                    source: .dns,
+                    previous: previous?.dnsAddresses,
+                    previousInputs: previous?.dnsDomains,
+                    now: now
+                )
+            } else if let previous,
+                      previous.dnsDomains == dnsInputs,
+                      isFresh(previous.dnsUpdatedAt, now: now) {
                 dnsResults[service.id] = cachedResult(service.id, .dns, previous.dnsAddresses, updatedAt: previous.dnsUpdatedAt,
                                                        freshness: previous.freshness)
             } else {
-                dnsWork.append(contentsOf: service.domains.map { DNSWork(serviceID: service.id, domain: $0) })
+                dnsWork.append(contentsOf: dnsInputs.map { DNSWork(serviceID: service.id, domain: $0) })
             }
 
-            if service.asn.isEmpty {
-                asnResults[service.id] = preserved(previous?.asnPrefixes, updatedAt: previous?.asnUpdatedAt,
-                                                   freshness: previous?.freshness ?? .fresh)
-            } else if let previous, isFresh(previous.asnUpdatedAt, now: now) {
+            if asnInputs.isEmpty {
+                asnResults[service.id] = retired(
+                    serviceID: service.id,
+                    source: .ripeStat,
+                    previous: previous?.asnPrefixes,
+                    previousInputs: previous?.asnNumbers.map(String.init),
+                    now: now
+                )
+            } else if let previous,
+                      previous.asnNumbers == asnInputs,
+                      isFresh(previous.asnUpdatedAt, now: now) {
                 asnResults[service.id] = cachedResult(service.id, .ripeStat, previous.asnPrefixes, updatedAt: previous.asnUpdatedAt,
                                                        freshness: previous.freshness)
             } else {
-                asnWork.append(contentsOf: service.asn.map { ASNWork(serviceID: service.id, number: $0) })
+                asnWork.append(contentsOf: asnInputs.map { ASNWork(serviceID: service.id, number: $0) })
             }
         }
 
@@ -375,8 +482,10 @@ struct ServiceEnricher: Sendable {
                 serviceID: service.id,
                 source: .dns,
                 values: dnsAttempts.filter { $0.0.serviceID == service.id },
-                previous: base?[service.id]?.dnsAddresses,
-                previousUpdatedAt: base?[service.id]?.dnsUpdatedAt,
+                previous: base?[service.id]?.dnsDomains == canonicalDomains(service.domains)
+                    ? base?[service.id]?.dnsAddresses : nil,
+                previousUpdatedAt: base?[service.id]?.dnsDomains == canonicalDomains(service.domains)
+                    ? base?[service.id]?.dnsUpdatedAt : nil,
                 now: now
             )
         }
@@ -385,8 +494,10 @@ struct ServiceEnricher: Sendable {
                 serviceID: service.id,
                 source: .ripeStat,
                 values: asnAttempts.filter { $0.0.serviceID == service.id },
-                previous: base?[service.id]?.asnPrefixes,
-                previousUpdatedAt: base?[service.id]?.asnUpdatedAt,
+                previous: base?[service.id]?.asnNumbers == canonicalASNs(service.asn)
+                    ? base?[service.id]?.asnPrefixes : nil,
+                previousUpdatedAt: base?[service.id]?.asnNumbers == canonicalASNs(service.asn)
+                    ? base?[service.id]?.asnUpdatedAt : nil,
                 now: now
             )
         }
@@ -401,6 +512,8 @@ struct ServiceEnricher: Sendable {
                 serviceID: service.id,
                 dnsAddresses: dnsResult.values,
                 asnPrefixes: asnResult.values,
+                dnsDomains: canonicalDomains(service.domains),
+                asnNumbers: canonicalASNs(service.asn),
                 dnsUpdatedAt: dnsResult.updatedAt,
                 asnUpdatedAt: asnResult.updatedAt,
                 freshness: combinedFreshness(dns: dnsResult.freshness, asn: asnResult.freshness)
@@ -408,9 +521,17 @@ struct ServiceEnricher: Sendable {
             diagnostics.append(contentsOf: dnsResult.diagnostics)
             diagnostics.append(contentsOf: asnResult.diagnostics)
         }
-        let snapshotFreshness = entries.contains { $0.freshness == .stale } ? "stale-cache" : "refresh"
+        let snapshotFreshness: String
+        if entries.contains(where: { $0.freshness == .stale }) {
+            snapshotFreshness = "stale-cache"
+        } else if dnsWork.isEmpty && asnWork.isEmpty {
+            snapshotFreshness = "cache-only"
+        } else {
+            snapshotFreshness = "refresh"
+        }
+        let provenance = [snapshotFreshness, base.map { "base=\($0.provenance)" }].compactMap { $0 }.joined(separator: "; ")
         return EnrichmentRefreshResult(
-            snapshot: EnrichmentSnapshot(generatedAt: now, provenance: snapshotFreshness, entries: entries),
+            snapshot: EnrichmentSnapshot(generatedAt: now, provenance: provenance, entries: entries),
             diagnostics: diagnostics
         )
     }
@@ -446,8 +567,18 @@ struct ServiceEnricher: Sendable {
                              diagnostics: [diagnostic(serviceID, source, freshness, message, hadFailure ? previousUpdatedAt : now)])
     }
 
-    private func preserved(_ values: [String]?, updatedAt: Date?, freshness: EnrichmentFreshness) -> SourceRefresh {
-        SourceRefresh(values: values ?? [], updatedAt: updatedAt, freshness: freshness, diagnostics: [])
+    private func retired(
+        serviceID: String,
+        source: EnrichmentSource,
+        previous: [String]?,
+        previousInputs: [String]?,
+        now: Date
+    ) -> SourceRefresh {
+        let hadEvidence = !(previous ?? []).isEmpty || !(previousInputs ?? []).isEmpty
+        let diagnostics = hadEvidence
+            ? [diagnostic(serviceID, source, .fresh, "Источник удалён из каталога; сохранённые данные удалены", now)]
+            : []
+        return SourceRefresh(values: [], updatedAt: now, freshness: .fresh, diagnostics: diagnostics)
     }
 
     private func cachedResult(_ serviceID: String, _ source: EnrichmentSource, _ values: [String], updatedAt: Date?, freshness: EnrichmentFreshness) -> SourceRefresh {
@@ -575,21 +706,23 @@ struct CatalogMatcher: Sendable {
         var routesByMode: [CatalogRouteMode: [String: [String]]] = [:]
         var unassigned: [CatalogRouteMode: [String]] = [:]
         var services = catalog.services
-        let inputs: [(CatalogRouteMode, [String], [TargetedRoute])] = [
-            (.targeted, targeted.map(\.address), targeted),
-            (.lite, lite, []),
-            (.full, full, [])
-        ]
-        for (mode, input, targetedRoutes) in inputs {
-            let matched = try matchMode(services: services, source: input, targeted: targetedRoutes, cached: cached)
+        let targetedMatched = try matchTargetedMode(services: services, targeted: targeted, cached: cached)
+        routesByMode[.targeted] = targetedMatched.routes
+        unassigned[.targeted] = targetedMatched.unassigned
+        for index in services.indices {
+            services[index].targetedAddresses = targetedMatched.routes[services[index].id] ?? []
+        }
+
+        for (mode, input) in [(CatalogRouteMode.lite, lite), (.full, full)] {
+            let matched = try matchSourceBoundMode(services: services, source: input, targetedEvidence: targeted, cached: cached)
             routesByMode[mode] = matched.routes
             unassigned[mode] = matched.unassigned
             for index in services.indices {
                 let routes = matched.routes[services[index].id] ?? []
                 switch mode {
-                case .targeted: services[index].targetedAddresses = routes
                 case .lite: services[index].liteAddresses = routes
                 case .full: services[index].fullAddresses = routes
+                case .targeted: break
                 }
             }
         }
@@ -617,15 +750,61 @@ struct CatalogMatcher: Sendable {
         try match(catalog: catalog, targeted: targeted.map { TargetedRoute(address: $0) }, lite: lite, full: full, cached: cached)
     }
 
-    private func matchMode(
+    /// Targeted retains its original domain binding and can add confirmed DNS
+    /// and explicit catalog CIDRs outside the legacy targeted source universe.
+    /// Its unassigned partition is limited to the legacy source routes; unlike
+    /// Lite/Full, the emitted service union intentionally contains additions.
+    private func matchTargetedMode(
+        services: [CatalogService],
+        targeted: [TargetedRoute],
+        cached: EnrichmentSnapshot?
+    ) throws -> (routes: [String: [String]], unassigned: [String]) {
+        let sourceNetworks = try validatedSource(targeted.map(\.address))
+        let sourceIndex = IPv4RouteIndex(routes: sourceNetworks)
+        var owned: [String: [IPv4Network]] = Dictionary(uniqueKeysWithValues: services.map { ($0.id, []) })
+        var representationCount = 0
+
+        for service in services {
+            var evidence = service.ipRanges.compactMap(IPv4Network.init)
+            evidence.append(contentsOf: cached?[service.id]?.dnsAddresses.compactMap(IPv4Network.init) ?? [])
+            evidence.append(contentsOf: targeted.compactMap { route in
+                route.domain.map({ canonicalDomains(service.domains).contains($0) }) == true
+                    ? IPv4Network(route.address) : nil
+            })
+            let fragments = collapseIPv4(evidence)
+            try appendOwned(fragments, serviceID: service.id, owned: &owned, representationCount: &representationCount)
+        }
+
+        let assignedInsideSource = collapseIPv4(owned.values.flatMap { $0 }.flatMap { sourceIndex.intersections(with: $0) })
+        let remaining = try subtractAssigned(
+            assignedInsideSource,
+            from: sourceNetworks,
+            representationCount: &representationCount
+        )
+        let reconstructed = collapseIPv4(assignedInsideSource + remaining)
+        guard ipv4SetsEqual(reconstructed, sourceNetworks) else {
+            throw EnrichmentError.fragmentLimitExceeded(options.maximumFragments)
+        }
+        return (
+            Dictionary(uniqueKeysWithValues: services.map { service in
+                (service.id, collapseIPv4(owned[service.id] ?? []).map(\.description))
+            }),
+            collapseIPv4(remaining).map(\.description)
+        )
+    }
+
+    /// Lite and Full can only emit exact evidence intersections with their own
+    /// source universe, preserving source-set equality and no-widening.
+    private func matchSourceBoundMode(
         services: [CatalogService],
         source: [String],
-        targeted: [TargetedRoute],
+        targetedEvidence: [TargetedRoute],
         cached: EnrichmentSnapshot?
     ) throws -> (routes: [String: [String]], unassigned: [String]) {
         let sourceNetworks = try validatedSource(source)
         let index = IPv4RouteIndex(routes: sourceNetworks)
         var owned: [String: [IPv4Network]] = Dictionary(uniqueKeysWithValues: services.map { ($0.id, []) })
+        var representationCount = 0
 
         for service in services {
             var evidence = service.ipRanges.compactMap(IPv4Network.init)
@@ -633,11 +812,13 @@ struct CatalogMatcher: Sendable {
                 evidence.append(contentsOf: cachedEvidence.dnsAddresses.compactMap(IPv4Network.init))
                 evidence.append(contentsOf: cachedEvidence.asnPrefixes.compactMap(IPv4Network.init))
             }
-            for route in targeted where route.domain.map({ service.domains.contains($0) }) == true {
+            let domains = canonicalDomains(service.domains)
+            for route in targetedEvidence where route.domain.map({ domains.contains($0) }) == true {
                 if let network = IPv4Network(route.address) { evidence.append(network) }
             }
             for proof in collapseIPv4(evidence) {
-                owned[service.id, default: []].append(contentsOf: index.intersections(with: proof))
+                try appendOwned(index.intersections(with: proof), serviceID: service.id, owned: &owned,
+                                representationCount: &representationCount)
             }
         }
 
@@ -646,20 +827,7 @@ struct CatalogMatcher: Sendable {
             result[service.id] = collapseIPv4(owned[service.id] ?? []).map(\.description)
         }
         let assigned = collapseIPv4(owned.values.flatMap { $0 })
-        var remaining: [IPv4Network] = []
-        for route in sourceNetworks {
-            do {
-                let intersections = assigned.filter(route.intersects)
-                let fragments = try route.subtracting(intersections, limit: options.maximumFragments)
-                guard remaining.count <= options.maximumFragments - fragments.count else {
-                    throw EnrichmentError.fragmentLimitExceeded(options.maximumFragments)
-                }
-                remaining.append(contentsOf: fragments)
-            } catch let error as IPv4NetworkError {
-                if case .fragmentLimitExceeded = error { throw EnrichmentError.fragmentLimitExceeded(options.maximumFragments) }
-                throw error
-            }
-        }
+        let remaining = try subtractAssigned(assigned, from: sourceNetworks, representationCount: &representationCount)
         let reconstructed = collapseIPv4(owned.values.flatMap { $0 } + remaining)
         guard ipv4SetsEqual(reconstructed, sourceNetworks) else {
             throw EnrichmentError.fragmentLimitExceeded(options.maximumFragments)
@@ -667,17 +835,59 @@ struct CatalogMatcher: Sendable {
         return (result, collapseIPv4(remaining).map(\.description))
     }
 
+    /// The cap counts every service-owned emitted fragment. A shared fragment
+    /// therefore consumes one slot per owner, plus one if it is unassigned.
+    private func appendOwned(
+        _ fragments: [IPv4Network],
+        serviceID: String,
+        owned: inout [String: [IPv4Network]],
+        representationCount: inout Int
+    ) throws {
+        guard representationCount <= options.maximumFragments - fragments.count else {
+            throw EnrichmentError.fragmentLimitExceeded(options.maximumFragments)
+        }
+        owned[serviceID, default: []].append(contentsOf: fragments)
+        representationCount += fragments.count
+    }
+
+    private func subtractAssigned(
+        _ assigned: [IPv4Network],
+        from sourceNetworks: [IPv4Network],
+        representationCount: inout Int
+    ) throws -> [IPv4Network] {
+        var remaining: [IPv4Network] = []
+        for route in sourceNetworks {
+            do {
+                let budget = options.maximumFragments - representationCount
+                guard budget >= 0 else { throw EnrichmentError.fragmentLimitExceeded(options.maximumFragments) }
+                let fragments = try route.subtracting(assigned.filter(route.intersects), limit: budget)
+                guard representationCount <= options.maximumFragments - fragments.count else {
+                    throw EnrichmentError.fragmentLimitExceeded(options.maximumFragments)
+                }
+                remaining.append(contentsOf: fragments)
+                representationCount += fragments.count
+            } catch let error as IPv4NetworkError {
+                if case .fragmentLimitExceeded = error { throw EnrichmentError.fragmentLimitExceeded(options.maximumFragments) }
+                throw error
+            }
+        }
+        return remaining
+    }
+
     private func validatedSource(_ values: [String]) throws -> [IPv4Network] {
         let forbidden = options.forbiddenSourceRoutes.compactMap(IPv4Network.init)
         var result: [IPv4Network] = []
         for value in values {
             guard let network = IPv4Network(value) else { throw EnrichmentError.invalidSourceRoute(value) }
-            if options.rejectDefaultRoute, network.prefix == 0 { throw EnrichmentError.rejectedDefaultRoute }
             if forbidden.contains(where: { $0.intersects(network) }) {
                 throw EnrichmentError.forbiddenSourceRoute(network.description)
             }
             result.append(network)
         }
-        return collapseIPv4(result)
+        let normalized = collapseIPv4(result)
+        if options.rejectDefaultRoute, normalized.contains(where: { $0.prefix == 0 }) {
+            throw EnrichmentError.rejectedDefaultRoute
+        }
+        return normalized
     }
 }
