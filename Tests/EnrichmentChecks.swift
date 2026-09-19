@@ -78,17 +78,35 @@ private actor DelayedDNS: DomainResolving {
     func peakConcurrency() -> Int { maximumActive }
 }
 
+private final class AdvancingClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Date]
+
+    init(_ values: [Date]) {
+        self.values = values
+    }
+
+    func next() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        precondition(!values.isEmpty, "clock exhausted")
+        return values.removeFirst()
+    }
+}
+
 private final class RIPEStubProtocol: URLProtocol {
     static let lock = NSLock()
     static var body = Data()
     static var headers: [String: String] = [:]
     static var requestedURL: URL?
+    static var requestedURLs: [URL] = []
 
     static func reset(body: Data, headers: [String: String] = [:]) {
         lock.lock()
         self.body = body
         self.headers = headers
         requestedURL = nil
+        requestedURLs = []
         lock.unlock()
     }
 
@@ -98,6 +116,12 @@ private final class RIPEStubProtocol: URLProtocol {
         return requestedURL
     }
 
+    static func allURLs() -> [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return requestedURLs
+    }
+
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -105,6 +129,7 @@ private final class RIPEStubProtocol: URLProtocol {
         let body = Self.body
         let headers = Self.headers
         Self.requestedURL = request.url
+        if let url = request.url { Self.requestedURLs.append(url) }
         Self.lock.unlock()
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -120,15 +145,18 @@ struct EnrichmentChecks {
         try await testEvidenceOnlyOwnsExactSourceIntersections()
         try testProducedFragmentsRespectSharedRepresentationLimit()
         try testTargetedEvidenceCarriesAcrossModesAndAddsConfirmedRoutes()
+        try testTargetedAdditionsAreSafetyValidated()
         try testNormalizedDefaultRouteIsRejected()
         try await testFreshEvidenceSkipsNetworkRequests()
         try await testExpiredEvidenceIsRefreshed()
         try await testFailedRefreshKeepsLastSuccessfulEvidence()
         try await testChangedAndRemovedEvidenceInputsRetireObsoleteCache()
+        try await testAddedEvidenceInputsKeepUnchangedCacheDuringOutage()
         try await testBundledEvidenceBootstrapsCleanInstall()
         try testBundledSnapshotPreservesProvenance()
         try await testRIPEStatUsesAnnouncedPrefixesEndpoint()
         try await testRIPEStatKeepsOnlyCurrentObservationPrefixes()
+        try await testRIPEObservationAdvancesForEachRequest()
         try await testRIPEStatRejectsOversizedResponseBeforeDecode()
         try await testRIPEStatRejectsTooManyPrefixesBeforeRouteConstruction()
         testDNSCallbackCopiesIPv4BeforeReturning()
@@ -257,6 +285,32 @@ struct EnrichmentChecks {
         check(addresses(in: matched.unassignedRoutes[.full] ?? []).count == 255, "Full keeps its precise remainder")
     }
 
+    // Targeted additions are published outside the old targeted universe, so
+    // they must receive the same semantic default/private-range checks.
+    private static func testTargetedAdditionsAreSafetyValidated() throws {
+        func catalog(_ ranges: [String]) -> ServiceCatalog {
+            ServiceCatalog(services: [CatalogService(id: "targeted-safety", name: "Targeted safety", ipRanges: ranges)])
+        }
+        for ranges in [["0.0.0.0/0"], ["0.0.0.0/1", "128.0.0.0/1"]] {
+            do {
+                _ = try CatalogMatcher().match(
+                    catalog: catalog(ranges), targeted: [] as [TargetedRoute], lite: [], full: [], cached: nil
+                )
+                check(false, "targeted default-route additions must be rejected")
+            } catch let error as EnrichmentError {
+                check(error == .rejectedDefaultRoute, "targeted additions reject semantic defaults")
+            }
+        }
+        do {
+            _ = try CatalogMatcher(options: CatalogMatchOptions(forbiddenSourceRoutes: ["10.0.0.0/8"])).match(
+                catalog: catalog(["10.0.0.0/24"]), targeted: [] as [TargetedRoute], lite: [], full: [], cached: nil
+            )
+            check(false, "targeted forbidden additions must be rejected")
+        } catch let error as EnrichmentError {
+            check(error == .forbiddenSourceRoute("10.0.0.0/24"), "targeted additions respect configured forbidden routes")
+        }
+    }
+
     // CIDR normalization must apply before the default-route safety guard.
     private static func testNormalizedDefaultRouteIsRejected() throws {
         do {
@@ -372,6 +426,40 @@ struct EnrichmentChecks {
         check(retired.snapshot[old.id]?.asnNumbers.isEmpty == true, "ASN input identity records removal")
     }
 
+    // Adding inputs must retry them, but an outage cannot erase evidence from
+    // existing domain/ASN inputs that remain in the catalog.
+    private static func testAddedEvidenceInputsKeepUnchangedCacheDuringOutage() async throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let old = CatalogService(id: "addition", name: "Addition", domains: ["existing.example"], asn: [64520])
+        let cache = EnrichmentSnapshot(generatedAt: now, provenance: "fixture", entries: [
+            ServiceEnrichment(
+                serviceID: old.id,
+                dnsAddresses: ["192.0.2.1"],
+                asnPrefixes: ["192.0.2.0/24"],
+                dnsDomains: old.domains,
+                asnNumbers: old.asn,
+                dnsUpdatedAt: now,
+                asnUpdatedAt: now
+            )
+        ])
+        let updated = CatalogService(
+            id: old.id, name: old.name,
+            domains: ["existing.example", "added.example"],
+            asn: [64520, 64521]
+        )
+        let dns = StubDNS([:], failures: Set(updated.domains))
+        let asn = StubASN([:], failures: Set(updated.asn))
+        let result = try await ServiceEnricher(dns: dns, asn: asn, limits: EnrichmentLimits(cacheTTL: 3_600))
+            .enrich(catalog: ServiceCatalog(services: [updated]), cached: cache, now: now)
+        check(result.snapshot[old.id]?.dnsAddresses == ["192.0.2.1"], "unchanged domain evidence survives an added-domain outage")
+        check(result.snapshot[old.id]?.asnPrefixes == ["192.0.2.0/24"], "unchanged ASN evidence survives an added-ASN outage")
+        check(result.snapshot[old.id]?.freshness == .stale, "addition outage remains visibly stale")
+        let dnsRequests = await dns.recordedRequests()
+        let asnRequests = await asn.recordedRequests()
+        check(Set(dnsRequests) == Set(updated.domains), "all domains including the addition are retried")
+        check(Set(asnRequests) == Set(updated.asn), "all ASNs including the addition are retried")
+    }
+
     // This catches a clean-install path that ignores the shipped evidence and
     // starts by resolving every domain before it can construct a catalog.
     private static func testBundledEvidenceBootstrapsCleanInstall() async throws {
@@ -447,6 +535,31 @@ struct EnrichmentChecks {
         check(prefixes == ["198.51.100.0/24"], "only timelines covering the current observation are accepted")
         let query = URLComponents(url: RIPEStubProtocol.lastURL()!, resolvingAgainstBaseURL: false)?.queryItems ?? []
         check(query.contains(URLQueryItem(name: "endtime", value: "2026-09-19T00:00:00Z")), "RIPE query fixes its observation time")
+    }
+
+    // A retained loader refreshes over time, so the default observation must be
+    // read at each request rather than captured when the client is constructed.
+    private static func testRIPEObservationAdvancesForEachRequest() async throws {
+        let body = Data(#"{"data":{"query_endtime":"2026-09-19T01:00:00","prefixes":[{"prefix":"198.51.100.0/24","timelines":[{"starttime":"2026-09-19T00:00:00","endtime":"2026-09-19T02:00:00"}]}]}}"#.utf8)
+        RIPEStubProtocol.reset(body: body)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RIPEStubProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let clock = AdvancingClock([
+            Date(timeIntervalSince1970: 1_789_776_000),
+            Date(timeIntervalSince1970: 1_789_779_600)
+        ])
+        let loader = RIPEStatASNPrefixLoader(session: session, observationClock: { clock.next() })
+        _ = try await loader.announcedPrefixes(for: 64514, timeout: 1)
+        _ = try await loader.announcedPrefixes(for: 64514, timeout: 1)
+        let urls = RIPEStubProtocol.allURLs()
+        check(urls.count == 2, "two refreshes reached RIPEstat")
+        let ends = urls.compactMap { url in
+            URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                .first(where: { $0.name == "endtime" })?.value
+        }
+        check(ends == ["2026-09-19T00:00:00Z", "2026-09-19T01:00:00Z"], "RIPE observation advances per request")
     }
 
     // The client must reject Content-Length before buffering or decoding a

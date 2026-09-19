@@ -23,6 +23,13 @@ private func canonicalASNs(_ values: [Int]) -> [Int] {
     Array(Set(values.filter { $0 > 0 })).sorted()
 }
 
+private func retainsOnlyStillApplicableInputs<Value: Hashable>(_ previous: [Value], current: [Value]) -> Bool {
+    // Legacy snapshots have no input identity, so their values cannot be
+    // proven applicable. A nonempty prior identity that is a subset of the
+    // current inputs represents an addition-only update and remains safe.
+    !previous.isEmpty && Set(previous).isSubset(of: Set(current))
+}
+
 /// Official RIPEstat announced-prefixes client. It receives ASN identifiers
 /// only; manually entered addresses are never sent to this endpoint.
 struct RIPEStatASNPrefixLoader: ASNPrefixLoading, Sendable {
@@ -32,7 +39,8 @@ struct RIPEStatASNPrefixLoader: ASNPrefixLoading, Sendable {
 
     private let session: URLSession
     private let endpoint: URL
-    private let observationTime: Date
+    private let fixedObservationTime: Date?
+    private let observationClock: @Sendable () -> Date
     private let observationWindow: TimeInterval
     private let maximumResponseBytes: Int
     private let maximumPrefixCount: Int
@@ -40,14 +48,16 @@ struct RIPEStatASNPrefixLoader: ASNPrefixLoading, Sendable {
     init(
         session: URLSession = .shared,
         endpoint: URL = URL(string: "https://stat.ripe.net/data/announced-prefixes/data.json")!,
-        observationTime: Date = Date(),
+        observationTime: Date? = nil,
+        observationClock: @escaping @Sendable () -> Date = { Date() },
         observationWindow: TimeInterval = 60 * 60,
         maximumResponseBytes: Int = RIPEStatASNPrefixLoader.maximumResponseBytes,
         maximumPrefixCount: Int = RIPEStatASNPrefixLoader.maximumPrefixes
     ) {
         self.session = session
         self.endpoint = endpoint
-        self.observationTime = observationTime
+        self.fixedObservationTime = observationTime
+        self.observationClock = observationClock
         self.observationWindow = max(1, observationWindow)
         self.maximumResponseBytes = max(1, maximumResponseBytes)
         self.maximumPrefixCount = max(1, maximumPrefixCount)
@@ -56,6 +66,7 @@ struct RIPEStatASNPrefixLoader: ASNPrefixLoading, Sendable {
     func announcedPrefixes(for asn: Int, timeout: TimeInterval) async throws -> [String] {
         guard asn > 0 else { throw EnrichmentError.invalidRIPEStatResponse }
         var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
+        let observationTime = fixedObservationTime ?? observationClock()
         let observationEnd = Self.renderRIPETime(observationTime)
         let observationStart = Self.renderRIPETime(observationTime.addingTimeInterval(-observationWindow))
         components.queryItems = [
@@ -482,9 +493,9 @@ struct ServiceEnricher: Sendable {
                 serviceID: service.id,
                 source: .dns,
                 values: dnsAttempts.filter { $0.0.serviceID == service.id },
-                previous: base?[service.id]?.dnsDomains == canonicalDomains(service.domains)
+                previous: retainsOnlyStillApplicableInputs(base?[service.id]?.dnsDomains ?? [], current: canonicalDomains(service.domains))
                     ? base?[service.id]?.dnsAddresses : nil,
-                previousUpdatedAt: base?[service.id]?.dnsDomains == canonicalDomains(service.domains)
+                previousUpdatedAt: retainsOnlyStillApplicableInputs(base?[service.id]?.dnsDomains ?? [], current: canonicalDomains(service.domains))
                     ? base?[service.id]?.dnsUpdatedAt : nil,
                 now: now
             )
@@ -494,9 +505,9 @@ struct ServiceEnricher: Sendable {
                 serviceID: service.id,
                 source: .ripeStat,
                 values: asnAttempts.filter { $0.0.serviceID == service.id },
-                previous: base?[service.id]?.asnNumbers == canonicalASNs(service.asn)
+                previous: retainsOnlyStillApplicableInputs(base?[service.id]?.asnNumbers ?? [], current: canonicalASNs(service.asn))
                     ? base?[service.id]?.asnPrefixes : nil,
-                previousUpdatedAt: base?[service.id]?.asnNumbers == canonicalASNs(service.asn)
+                previousUpdatedAt: retainsOnlyStillApplicableInputs(base?[service.id]?.asnNumbers ?? [], current: canonicalASNs(service.asn))
                     ? base?[service.id]?.asnUpdatedAt : nil,
                 now: now
             )
@@ -771,10 +782,14 @@ struct CatalogMatcher: Sendable {
                 route.domain.map({ canonicalDomains(service.domains).contains($0) }) == true
                     ? IPv4Network(route.address) : nil
             })
-            let fragments = collapseIPv4(evidence)
+            let fragments = try validatedNetworks(evidence)
             try appendOwned(fragments, serviceID: service.id, owned: &owned, representationCount: &representationCount)
         }
 
+        // Individual service validation catches direct and split defaults in a
+        // single catalog row; validating the emitted union also catches a
+        // semantic default assembled across several targeted additions.
+        _ = try validatedNetworks(owned.values.flatMap { $0 })
         let assignedInsideSource = collapseIPv4(owned.values.flatMap { $0 }.flatMap { sourceIndex.intersections(with: $0) })
         let remaining = try subtractAssigned(
             assignedInsideSource,
@@ -875,18 +890,24 @@ struct CatalogMatcher: Sendable {
     }
 
     private func validatedSource(_ values: [String]) throws -> [IPv4Network] {
-        let forbidden = options.forbiddenSourceRoutes.compactMap(IPv4Network.init)
         var result: [IPv4Network] = []
         for value in values {
             guard let network = IPv4Network(value) else { throw EnrichmentError.invalidSourceRoute(value) }
-            if forbidden.contains(where: { $0.intersects(network) }) {
-                throw EnrichmentError.forbiddenSourceRoute(network.description)
-            }
             result.append(network)
         }
-        let normalized = collapseIPv4(result)
+        return try validatedNetworks(result)
+    }
+
+    private func validatedNetworks(_ values: [IPv4Network]) throws -> [IPv4Network] {
+        let normalized = collapseIPv4(values)
         if options.rejectDefaultRoute, normalized.contains(where: { $0.prefix == 0 }) {
             throw EnrichmentError.rejectedDefaultRoute
+        }
+        let forbidden = options.forbiddenSourceRoutes.compactMap(IPv4Network.init)
+        if let rejected = normalized.first(where: { network in
+            forbidden.contains(where: { $0.intersects(network) })
+        }) {
+            throw EnrichmentError.forbiddenSourceRoute(rejected.description)
         }
         return normalized
     }
