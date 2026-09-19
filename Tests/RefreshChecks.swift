@@ -1,0 +1,333 @@
+import Foundation
+
+private func check(_ value: @autoclosure () -> Bool, _ message: String) {
+    precondition(value(), message)
+}
+
+@main
+struct RefreshChecks {
+    static func main() async throws {
+        try await testSuccessfulRefreshReplacesEveryModeAndUsesCustomURLs()
+        try await testFailedSourceDoesNotMutateWorkingState()
+        try await testFailedSourceReportsEveryRouteSource()
+        try await testSuspiciousCatalogShrinkDoesNotMutateWorkingState()
+        try await testCachedPartialEnrichmentCanCommit()
+        try await testBundledEvidenceBootstrapsFirstRefresh()
+        try await testOverallDeadlineDoesNotMutateWorkingState()
+        try await testFragmentLimitDoesNotMutateWorkingState()
+        try await testCancelledRefreshDoesNotMutateWorkingState()
+        try testPreMigrationBackupIsRawAndCreatedOnlyOnce()
+        try testPreMigrationBackupDoesNotReplaceV11Backup()
+        print("Refresh checks passed")
+    }
+
+    // This catches the former mode-by-mode update path: it could publish one
+    // source before a later source failed, and it dropped custom source URLs.
+    private static func testSuccessfulRefreshReplacesEveryModeAndUsesCustomURLs() async throws {
+        let state = legacyState()
+        let urls = RefreshSourceURLs(
+            metadata: "https://example.test/catalog.yaml",
+            targeted: "https://example.test/targeted.json",
+            lite: "https://example.test/lite.json",
+            full: "https://example.test/full.json"
+        )
+        let recorder = URLRecorder()
+        let service = CatalogService(id: "new", name: "New", domains: ["new.example"])
+        let pipeline = RefreshPipeline(
+            dependencies: RefreshPipelineDependencies(
+                loadCatalog: { request in
+                    await recorder.record(request.urls)
+                    return ServiceCatalog(services: [service], freshness: .remote)
+                },
+                loadTargeted: { _ in [TargetedRoute(domain: "new.example", address: "192.0.2.9")] },
+                loadLite: { _ in ["198.51.100.0/24"] },
+                loadFull: { _ in ["203.0.113.0/24"] },
+                enrich: { _, _ in EnrichmentRefreshResult(snapshot: EnrichmentSnapshot(generatedAt: .now, provenance: "fixture", entries: []), diagnostics: []) },
+                match: { catalog, targeted, lite, full, cache in
+                    try CatalogMatcher().match(catalog: catalog, targeted: targeted, lite: lite, full: full, cached: cache)
+                }
+            )
+        )
+
+        let transaction = try await pipeline.run(RefreshRequest(state: state, urls: urls))
+        let seenURLs = await recorder.urls
+        check(seenURLs == urls, "refresh keeps user-configured source URLs")
+        var committed = state
+        check(committed.applyRefreshTransaction(transaction), "complete refresh transaction is accepted")
+        check(committed.catalog?.services.map(\.id).contains("new") == true, "new metadata replaces legacy catalog")
+        check(committed.exportRoutes(for: .targeted).contains("192.0.2.9/32"), "targeted source is applied")
+        check(committed.exportRoutes(for: .lite).contains("198.51.100.0/24"), "lite source is applied")
+        check(committed.exportRoutes(for: .full).contains("203.0.113.0/24"), "full source is applied")
+        check(ExportMode.allCases.allSatisfy { committed.lastCheck(for: $0) != nil }, "one transaction marks every mode as checked")
+        check(Set(transaction.sourceChecks.map(\.id)).isSuperset(of: ["metadata", "targeted", "lite", "full", "dns", "ripeStat"]), "transaction exposes every source diagnostic")
+    }
+
+    // Production mutation that this test catches: assigning a loaded Targeted
+    // list before the Lite or Full fetch throws.
+    private static func testFailedSourceDoesNotMutateWorkingState() async throws {
+        let state = legacyState()
+        let before = encoded(state)
+        let export = state.export
+        let pipeline = fixturePipeline(loadLite: { _ in throw FixtureError.unavailable })
+
+        do {
+            _ = try await pipeline.run(RefreshRequest(state: state))
+            check(false, "one failed source must reject the whole transaction")
+        } catch let error as RefreshPipelineError {
+            check(error.sourceChecks.contains { $0.id == "lite" && !$0.success }, "failed source has an actionable diagnostic")
+        }
+        check(encoded(state) == before && state.export == export, "failed source leaves working state and export unchanged")
+    }
+
+    // A rejected refresh is still useful only when its diagnostics identify
+    // every source that did complete, rather than cancelling healthy loads as
+    // soon as the first failure happens.
+    private static func testFailedSourceReportsEveryRouteSource() async throws {
+        let state = legacyState()
+        let pipeline = fixturePipeline(
+            loadLite: { _ in throw FixtureError.unavailable },
+            loadFull: { _ in
+                try await Task.sleep(nanoseconds: 20_000_000)
+                return ["203.0.113.0/24"]
+            }
+        )
+
+        do {
+            _ = try await pipeline.run(RefreshRequest(state: state))
+            check(false, "one failed source must reject the whole transaction")
+        } catch let error as RefreshPipelineError {
+            check(
+                Set(error.sourceChecks.map(\.id)).isSuperset(of: ["metadata", "targeted", "lite", "full"]),
+                "a failed refresh reports every completed route-source diagnostic"
+            )
+        }
+    }
+
+    // Production mutation that this test catches: accepting a shrunken remote
+    // metadata catalog and publishing the accompanying route changes.
+    private static func testSuspiciousCatalogShrinkDoesNotMutateWorkingState() async throws {
+        var state = legacyState()
+        state.catalog = ServiceCatalog(services: (0..<4).map { CatalogService(id: "old-\($0)", name: "Old \($0)", domains: ["old\($0).example"]) })
+        let before = encoded(state)
+        let pipeline = fixturePipeline(loadCatalog: { _ in
+            throw ServiceCatalogError.suspiciousShrink(previous: 4, candidate: 1)
+        })
+
+        do {
+            _ = try await pipeline.run(RefreshRequest(state: state))
+            check(false, "suspicious catalog shrink must reject the transaction")
+        } catch let error as RefreshPipelineError {
+            check(error.sourceChecks.contains { $0.id == "metadata" && !$0.success }, "metadata shrink is surfaced as metadata failure")
+        }
+        check(encoded(state) == before, "suspicious metadata shrink leaves state unchanged")
+    }
+
+    // Production mutation that this test catches: treating a stale cached DNS
+    // result as a refresh failure and losing a service's last known route.
+    private static func testCachedPartialEnrichmentCanCommit() async throws {
+        let state = legacyState()
+        let service = CatalogService(id: "cached", name: "Cached", domains: ["cached.example"])
+        let stale = EnrichmentSnapshot(
+            generatedAt: .now,
+            provenance: "fixture",
+            entries: [ServiceEnrichment(serviceID: service.id, dnsAddresses: ["192.0.2.88"], dnsDomains: service.domains, freshness: .stale)]
+        )
+        let pipeline = fixturePipeline(
+            loadCatalog: { _ in ServiceCatalog(services: [service]) },
+            enrich: { _, cached in
+                check(cached == state.cachedEnrichment, "pipeline supplies persisted enrichment to the refresh")
+                return EnrichmentRefreshResult(
+                    snapshot: stale,
+                    diagnostics: [EnrichmentDiagnostic(serviceID: service.id, source: .dns, freshness: .stale, message: "Источник недоступен; использован кэш", updatedAt: .now)]
+                )
+            }
+        )
+
+        let transaction = try await pipeline.run(RefreshRequest(state: state))
+        var committed = state
+        check(committed.applyRefreshTransaction(transaction), "stale cache remains a valid complete transaction")
+        check(committed.exportRoutes(for: .targeted).contains("192.0.2.88/32"), "cached evidence remains exportable")
+        check(transaction.sourceChecks.first { $0.id == "dns" }?.message.contains("кэш") == true, "diagnostic identifies cache fallback")
+    }
+
+    // Production mutation that this test catches: passing nil instead of the
+    // app bundle snapshot on a first refresh, which needlessly empties route
+    // ownership while DNS and RIPEstat are unavailable.
+    private static func testBundledEvidenceBootstrapsFirstRefresh() async throws {
+        let state = legacyState()
+        let service = CatalogService(id: "bundled", name: "Bundled", domains: ["bundled.example"])
+        let bundled = EnrichmentSnapshot(
+            generatedAt: .now,
+            provenance: "bundled fixture",
+            entries: [ServiceEnrichment(serviceID: service.id, dnsAddresses: ["192.0.2.77"], dnsDomains: service.domains, freshness: .bundled)]
+        )
+        let pipeline = fixturePipeline(
+            loadCatalog: { _ in ServiceCatalog(services: [service]) },
+            enrich: { _, cached in
+                check(cached == nil, "clean install has no persisted enrichment")
+                return EnrichmentRefreshResult(snapshot: bundled, diagnostics: [
+                    EnrichmentDiagnostic(serviceID: service.id, source: .dns, freshness: .bundled, message: "Использован включённый снимок", updatedAt: .now)
+                ])
+            }
+        )
+
+        let transaction = try await pipeline.run(RefreshRequest(state: state))
+        var committed = state
+        check(committed.applyRefreshTransaction(transaction), "bundled evidence transaction is accepted")
+        check(committed.exportRoutes(for: .targeted).contains("192.0.2.77/32"), "bundled evidence can bootstrap targeted export")
+        check(transaction.sourceChecks.first { $0.id == "dns" }?.message.contains("снимок") == true, "diagnostic identifies bundled evidence")
+    }
+
+    // Production mutation that this test catches: allowing a slow network task
+    // to outlive the refresh deadline and commit after the UI already gave up.
+    private static func testOverallDeadlineDoesNotMutateWorkingState() async throws {
+        let state = legacyState()
+        let before = encoded(state)
+        let pipeline = fixturePipeline(
+            overallTimeout: 0.02,
+            loadFull: { _ in
+                try await Task.sleep(nanoseconds: 200_000_000)
+                return ["203.0.113.0/24"]
+            }
+        )
+
+        do {
+            _ = try await pipeline.run(RefreshRequest(state: state))
+            check(false, "overall deadline must reject an incomplete transaction")
+        } catch let error as RefreshPipelineError {
+            check(error.isDeadlineExceeded, "deadline failure is actionable")
+        }
+        check(encoded(state) == before, "deadline expiry leaves working state unchanged")
+    }
+
+    // Production mutation that this test catches: committing a partially
+    // partitioned source when the matcher reaches its representation limit.
+    private static func testFragmentLimitDoesNotMutateWorkingState() async throws {
+        let state = legacyState()
+        let before = encoded(state)
+        let service = CatalogService(id: "fragment", name: "Fragment", ipRanges: ["192.0.2.1"])
+        let pipeline = fixturePipeline(
+            loadCatalog: { _ in ServiceCatalog(services: [service]) },
+            loadTargeted: { _ in [TargetedRoute(address: "192.0.2.0/24")] },
+            match: { catalog, targeted, lite, full, cache in
+                try CatalogMatcher(options: CatalogMatchOptions(maximumFragments: 1))
+                    .match(catalog: catalog, targeted: targeted, lite: lite, full: full, cached: cache)
+            }
+        )
+
+        do {
+            _ = try await pipeline.run(RefreshRequest(state: state))
+            check(false, "fragment limit must reject the transaction")
+        } catch let error as RefreshPipelineError {
+            check(error.sourceChecks.contains { $0.id == "matching" && !$0.success }, "matcher rejection is diagnosed")
+        }
+        check(encoded(state) == before, "fragment-limit rejection leaves working state unchanged")
+    }
+
+    // Production mutation that this test catches: swallowing cancellation,
+    // then applying the late result after a scheduled refresh is stopped.
+    private static func testCancelledRefreshDoesNotMutateWorkingState() async throws {
+        let state = legacyState()
+        let before = encoded(state)
+        let pipeline = fixturePipeline(loadTargeted: { _ in
+            try await Task.sleep(nanoseconds: 200_000_000)
+            return [TargetedRoute(address: "192.0.2.9")]
+        })
+        let task = Task { try await pipeline.run(RefreshRequest(state: state)) }
+        await Task.yield()
+        task.cancel()
+        do {
+            _ = try await task.value
+            check(false, "cancelled refresh must not return a transaction")
+        } catch is CancellationError { }
+        check(encoded(state) == before, "cancelled refresh leaves working state unchanged")
+    }
+
+    // Production mutation that this test catches: serializing the migrated
+    // schema before preserving the literal pre-1.4 bytes, or overwriting the
+    // one-time backup on a later write.
+    private static func testPreMigrationBackupIsRawAndCreatedOnlyOnce() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("iplist-refresh-check-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let legacy = Data("{\"services\":[]}".utf8)
+        var state = AppState()
+        state.stateVersion = 14
+        try StatePersistence.write(state, to: directory, rawPreMigrationState: legacy)
+        let backup = directory.appendingPathComponent("state-before-v1.4.json")
+        let firstBackup = try Data(contentsOf: backup)
+        check(firstBackup == legacy, "migration backup contains exact raw legacy state")
+        state.manual = [ManualEntry(address: "192.0.2.55")]
+        try StatePersistence.write(state, to: directory, rawPreMigrationState: Data("different".utf8))
+        let secondBackup = try Data(contentsOf: backup)
+        check(secondBackup == legacy, "migration backup is created only once")
+    }
+
+    private static func testPreMigrationBackupDoesNotReplaceV11Backup() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("iplist-refresh-check-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let v11Backup = directory.appendingPathComponent("state-before-v1.1.json")
+        let original = Data("v1.1 bytes".utf8)
+        try original.write(to: v11Backup)
+        try StatePersistence.write(AppState(), to: directory, rawPreMigrationState: Data("legacy bytes".utf8))
+        let preserved = try Data(contentsOf: v11Backup)
+        check(preserved == original, "v1.4 migration leaves the existing v1.1 backup untouched")
+    }
+
+    private static func fixturePipeline(
+        overallTimeout: TimeInterval = 1,
+        loadCatalog: @escaping @Sendable (RefreshRequest) async throws -> ServiceCatalog = { _ in
+            ServiceCatalog(services: [CatalogService(id: "fixture", name: "Fixture", domains: ["fixture.example"])])
+        },
+        loadTargeted: @escaping @Sendable (RefreshRequest) async throws -> [TargetedRoute] = { _ in
+            [TargetedRoute(domain: "fixture.example", address: "192.0.2.9")]
+        },
+        loadLite: @escaping @Sendable (RefreshRequest) async throws -> [String] = { _ in ["198.51.100.0/24"] },
+        loadFull: @escaping @Sendable (RefreshRequest) async throws -> [String] = { _ in ["203.0.113.0/24"] },
+        enrich: @escaping @Sendable (ServiceCatalog, EnrichmentSnapshot?) async throws -> EnrichmentRefreshResult = { _, _ in
+            EnrichmentRefreshResult(snapshot: EnrichmentSnapshot(generatedAt: .now, provenance: "fixture", entries: []), diagnostics: [])
+        },
+        match: @escaping @Sendable (ServiceCatalog, [TargetedRoute], [String], [String], EnrichmentSnapshot?) throws -> MatchedCatalog = { catalog, targeted, lite, full, cached in
+            try CatalogMatcher().match(catalog: catalog, targeted: targeted, lite: lite, full: full, cached: cached)
+        }
+    ) -> RefreshPipeline {
+        RefreshPipeline(
+            dependencies: RefreshPipelineDependencies(
+                loadCatalog: loadCatalog,
+                loadTargeted: loadTargeted,
+                loadLite: loadLite,
+                loadFull: loadFull,
+                enrich: enrich,
+                match: match
+            ),
+            overallTimeout: overallTimeout
+        )
+    }
+
+    private static func legacyState() -> AppState {
+        var state = AppState()
+        state.stateVersion = 13
+        state.services = [Service(id: "legacy", name: "Legacy", category: "Legacy", domains: ["legacy.example"], addresses: ["198.18.0.1"])]
+        state.selected = ["legacy"]
+        state.selectedCatalogIDs = ["legacy"]
+        state.selectionInitialized = true
+        state.manual = [ManualEntry(address: "203.0.113.250")]
+        return state
+    }
+
+    private static func encoded(_ state: AppState) -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try! encoder.encode(state)
+    }
+}
+
+private enum FixtureError: LocalizedError {
+    case unavailable
+    var errorDescription: String? { "fixture unavailable" }
+}
+
+private actor URLRecorder {
+    private(set) var urls: RefreshSourceURLs?
+    func record(_ urls: RefreshSourceURLs) { self.urls = urls }
+}

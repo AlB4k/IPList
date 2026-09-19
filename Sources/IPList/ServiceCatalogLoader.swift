@@ -416,7 +416,12 @@ final class ServiceCatalogLoader: @unchecked Sendable {
         self.relativeMinimum = min(max(relativeMinimum, 0), 1)
     }
 
-    func load(remoteURL: URL, fallbackData: Data? = nil, previousCatalog: ServiceCatalog? = nil) async throws -> ServiceCatalog {
+    func load(
+        remoteURL: URL,
+        fallbackData: Data? = nil,
+        previousCatalog: ServiceCatalog? = nil,
+        fallbackCatalog: ServiceCatalog? = nil
+    ) async throws -> ServiceCatalog {
         let previous = previousCatalog ?? lastSuccessfulCatalog
         do {
             let data = try await fetch(remoteURL)
@@ -428,10 +433,23 @@ final class ServiceCatalogLoader: @unchecked Sendable {
             lastSuccessfulCatalog = candidate
             return candidate
         } catch {
+            // A malformed, colliding, or suspiciously shrunken remote catalog
+            // is a failed validation, not an outage. Falling back here would
+            // mask an upstream regression and make an atomic refresh appear
+            // successful with a mixture of generations.
+            guard case ServiceCatalogError.remoteUnavailable = error else {
+                throw error
+            }
             if let lastSuccessfulCatalog {
                 var cached = lastSuccessfulCatalog
                 cached.freshness = .cached
                 return cached
+            }
+            if var fallbackCatalog {
+                try validate(fallbackCatalog, against: previous)
+                fallbackCatalog.freshness = .cached
+                fallbackCatalog.sourceURL = fallbackCatalog.sourceURL ?? "saved-state"
+                return fallbackCatalog
             }
             if let fallbackData {
                 do {
@@ -463,9 +481,19 @@ final class ServiceCatalogLoader: @unchecked Sendable {
         }
     }
 
-    func load(remoteURL: String, fallbackData: Data? = nil, previousCatalog: ServiceCatalog? = nil) async throws -> ServiceCatalog {
+    func load(
+        remoteURL: String,
+        fallbackData: Data? = nil,
+        previousCatalog: ServiceCatalog? = nil,
+        fallbackCatalog: ServiceCatalog? = nil
+    ) async throws -> ServiceCatalog {
         guard let url = URL(string: remoteURL) else { throw ServiceCatalogError.remoteUnavailable("некорректный URL") }
-        return try await load(remoteURL: url, fallbackData: fallbackData, previousCatalog: previousCatalog)
+        return try await load(
+            remoteURL: url,
+            fallbackData: fallbackData,
+            previousCatalog: previousCatalog,
+            fallbackCatalog: fallbackCatalog
+        )
     }
 
     private func fetch(_ url: URL) async throws -> Data {

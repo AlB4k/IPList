@@ -21,6 +21,11 @@ swiftc -parse-as-library "${available_sources[@]}" Tests/CoreChecks.swift -o .bu
 swiftc -parse-as-library "${available_sources[@]}" Tests/StateChecks.swift -o .build/checks/state-checks
 .build/checks/state-checks
 
+if [[ -f Tests/RefreshChecks.swift ]]; then
+  swiftc -parse-as-library "${available_sources[@]}" Tests/RefreshChecks.swift -o .build/checks/refresh-checks
+  .build/checks/refresh-checks
+fi
+
 catalog_sources=(
   Sources/IPList/CatalogModels.swift
   Sources/IPList/ServiceCatalogLoader.swift

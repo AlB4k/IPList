@@ -534,9 +534,361 @@ struct AppState: Codable {
         if selectAllByDefault { result.formUnion(incomingIDs.subtracting(Set(resolution.mappings.values))) }
         return result
     }
+
+    /// Commits an already validated refresh candidate as one state replacement.
+    /// A rejected candidate never leaks its catalog, cached evidence, or check
+    /// timestamps into the persisted state.
+    @discardableResult mutating func applyRefreshTransaction(_ transaction: RefreshTransaction) -> Bool {
+        var candidate = self
+        guard candidate.applyMatchedCatalog(transaction.matchedCatalog, cachedEnrichment: transaction.enrichment.snapshot) else {
+            return false
+        }
+        for mode in ExportMode.allCases {
+            candidate.markChecked(mode, at: transaction.completedAt)
+        }
+        self = candidate
+        return true
+    }
+}
+
+struct RefreshSourceURLs: Equatable, Sendable {
+    var metadata: String
+    var targeted: String
+    var lite: String
+    var full: String
+
+    init(
+        metadata: String = CatalogSources.metadataRaw,
+        targeted: String = CatalogSources.targetedRelease,
+        lite: String = CatalogSources.liteRelease,
+        full: String = CatalogSources.fullRelease
+    ) {
+        self.metadata = metadata
+        self.targeted = targeted
+        self.lite = lite
+        self.full = full
+    }
+}
+
+struct RefreshRequest: Sendable {
+    var previousCatalog: ServiceCatalog?
+    var cachedEnrichment: EnrichmentSnapshot?
+    var urls: RefreshSourceURLs
+
+    init(state: AppState, urls: RefreshSourceURLs? = nil) {
+        if let existing = state.catalog {
+            let metadataServices = existing.services.filter { $0.category != "Дополнительные ресурсы lib4u" }
+            previousCatalog = ServiceCatalog(
+                services: metadataServices,
+                freshness: existing.freshness,
+                sourceURL: existing.sourceURL,
+                loadedAt: existing.loadedAt
+            )
+        } else {
+            previousCatalog = nil
+        }
+        cachedEnrichment = state.cachedEnrichment
+        self.urls = urls ?? RefreshSourceURLs(
+            targeted: state.sourceURL,
+            lite: state.liteSourceURL,
+            full: state.fullSourceURL
+        )
+    }
+}
+
+struct RefreshTransaction: Sendable {
+    var matchedCatalog: MatchedCatalog
+    var enrichment: EnrichmentRefreshResult
+    var sourceChecks: [SourceCheck]
+    var sourceRoutes: [ExportMode: Set<String>]
+    var completedAt: Date
+}
+
+struct RefreshPipelineDependencies: Sendable {
+    var loadCatalog: @Sendable (RefreshRequest) async throws -> ServiceCatalog
+    var loadTargeted: @Sendable (RefreshRequest) async throws -> [TargetedRoute]
+    var loadLite: @Sendable (RefreshRequest) async throws -> [String]
+    var loadFull: @Sendable (RefreshRequest) async throws -> [String]
+    var enrich: @Sendable (ServiceCatalog, EnrichmentSnapshot?) async throws -> EnrichmentRefreshResult
+    var match: @Sendable (ServiceCatalog, [TargetedRoute], [String], [String], EnrichmentSnapshot?) throws -> MatchedCatalog
+}
+
+enum RefreshPipelineError: LocalizedError {
+    case sourceFailure([SourceCheck])
+    case deadlineExceeded([SourceCheck])
+    case validationFailure([SourceCheck], String)
+
+    var sourceChecks: [SourceCheck] {
+        switch self {
+        case .sourceFailure(let checks), .deadlineExceeded(let checks), .validationFailure(let checks, _): return checks
+        }
+    }
+
+    var isDeadlineExceeded: Bool {
+        if case .deadlineExceeded = self { return true }
+        return false
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .sourceFailure(let checks):
+            return checks.first(where: { !$0.success })?.message ?? "Один из источников не обновился"
+        case .deadlineExceeded:
+            return "Превышено общее время обновления. Предыдущие данные сохранены."
+        case .validationFailure(_, let message):
+            return message
+        }
+    }
+}
+
+struct RefreshPipeline: Sendable {
+    private let dependencies: RefreshPipelineDependencies
+    private let overallTimeout: TimeInterval
+
+    init(dependencies: RefreshPipelineDependencies, overallTimeout: TimeInterval = EnrichmentLimits.overallTimeout) {
+        self.dependencies = dependencies
+        self.overallTimeout = max(0.01, overallTimeout)
+    }
+
+    static func live() -> RefreshPipeline {
+        let routeLoader = CatalogLoader()
+        let metadataLoader = ServiceCatalogLoader()
+        let enricher = ServiceEnricher(dns: SystemDNSResolver(), asn: RIPEStatASNPrefixLoader())
+        return RefreshPipeline(
+            dependencies: RefreshPipelineDependencies(
+                loadCatalog: { request in
+                    try await metadataLoader.load(
+                        remoteURL: request.urls.metadata,
+                        previousCatalog: request.previousCatalog,
+                        fallbackCatalog: request.previousCatalog
+                    )
+                },
+                loadTargeted: { request in
+                    try await routeLoader.loadTargetedRoutes(source: request.urls.targeted)
+                },
+                loadLite: { request in
+                    Array(try await routeLoader.loadRanges(mode: .lite, source: request.urls.lite)).sorted()
+                },
+                loadFull: { request in
+                    Array(try await routeLoader.loadRanges(mode: .full, source: request.urls.full)).sorted()
+                },
+                enrich: { catalog, cached in
+                    try await enricher.enrich(catalog: catalog, cached: cached)
+                },
+                match: { catalog, targeted, lite, full, cache in
+                    try CatalogMatcher().match(catalog: catalog, targeted: targeted, lite: lite, full: full, cached: cache)
+                }
+            )
+        )
+    }
+
+    func run(_ request: RefreshRequest) async throws -> RefreshTransaction {
+        try await withOverallDeadline {
+            let loaded = try await loadSources(request)
+            guard let catalog = loaded.catalog, let targeted = loaded.targeted,
+                  let lite = loaded.lite, let full = loaded.full else {
+                throw RefreshPipelineError.sourceFailure(loaded.checks)
+            }
+            try Task.checkCancellation()
+
+            let enrichmentStarted = Date()
+            let enrichment: EnrichmentRefreshResult
+            do {
+                enrichment = try await dependencies.enrich(catalog, request.cachedEnrichment)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                let failure = sourceCheck(
+                    id: "dns-ripeStat", name: "DNS и RIPEstat", url: "system DNS; RIPEstat",
+                    success: false, duration: Date().timeIntervalSince(enrichmentStarted), count: nil,
+                    message: error.localizedDescription
+                )
+                throw RefreshPipelineError.sourceFailure(ordered(loaded.checks + [failure]))
+            }
+            try Task.checkCancellation()
+
+            let checks = ordered(loaded.checks + enrichmentChecks(enrichment, duration: Date().timeIntervalSince(enrichmentStarted)))
+            do {
+                let matched = try dependencies.match(catalog, targeted, lite, full, enrichment.snapshot)
+                try Task.checkCancellation()
+                return RefreshTransaction(
+                    matchedCatalog: matched,
+                    enrichment: enrichment,
+                    sourceChecks: checks,
+                    sourceRoutes: [
+                        .targeted: Set(targeted.map(\.address)),
+                        .lite: Set(lite),
+                        .full: Set(full)
+                    ],
+                    completedAt: Date()
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                let failure = sourceCheck(
+                    id: "matching", name: "Сопоставление маршрутов", url: "локальная проверка",
+                    success: false, duration: 0, count: nil, message: error.localizedDescription
+                )
+                throw RefreshPipelineError.validationFailure(ordered(checks + [failure]), error.localizedDescription)
+            }
+        }
+    }
+
+    private func loadSources(_ request: RefreshRequest) async throws -> LoadedSources {
+        try await withThrowingTaskGroup(of: SourceOutcome.self) { group in
+            group.addTask { try await loadSource(id: "metadata", name: "Каталог сервисов", url: request.urls.metadata) { .catalog(try await dependencies.loadCatalog(request)) } }
+            group.addTask { try await loadSource(id: "targeted", name: "Точечный список", url: request.urls.targeted) { .targeted(try await dependencies.loadTargeted(request)) } }
+            group.addTask { try await loadSource(id: "lite", name: "Компактный IP-список", url: request.urls.lite) { .lite(try await dependencies.loadLite(request)) } }
+            group.addTask { try await loadSource(id: "full", name: "Полный IP-список", url: request.urls.full) { .full(try await dependencies.loadFull(request)) } }
+
+            var loaded = LoadedSources()
+            defer { group.cancelAll() }
+            while let outcome = try await group.next() {
+                loaded.absorb(outcome)
+            }
+            if loaded.checks.contains(where: { !$0.success }) {
+                throw RefreshPipelineError.sourceFailure(ordered(loaded.checks))
+            }
+            return loaded
+        }
+    }
+
+    private func withOverallDeadline<Output: Sendable>(
+        operation: @escaping @Sendable () async throws -> Output
+    ) async throws -> Output {
+        try await withThrowingTaskGroup(of: Output.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(overallTimeout * 1_000_000_000))
+                try Task.checkCancellation()
+                throw RefreshPipelineError.deadlineExceeded([])
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw RefreshPipelineError.deadlineExceeded([])
+            }
+            return result
+        }
+    }
+
+    private enum SourcePayload: Sendable {
+        case catalog(ServiceCatalog)
+        case targeted([TargetedRoute])
+        case lite([String])
+        case full([String])
+
+        var count: Int {
+            switch self {
+            case .catalog(let catalog): return catalog.services.count
+            case .targeted(let routes): return routes.count
+            case .lite(let routes), .full(let routes): return routes.count
+            }
+        }
+
+        var message: String {
+            if case .catalog(let catalog) = self, catalog.freshness == .cached {
+                return "Использована сохранённая копия"
+            }
+            return "Обновлено"
+        }
+    }
+
+    private struct SourceOutcome: Sendable {
+        var payload: SourcePayload?
+        var check: SourceCheck
+    }
+
+    private struct LoadedSources: Sendable {
+        var catalog: ServiceCatalog?
+        var targeted: [TargetedRoute]?
+        var lite: [String]?
+        var full: [String]?
+        var checks: [SourceCheck] = []
+
+        mutating func absorb(_ outcome: SourceOutcome) {
+            checks.append(outcome.check)
+            guard let payload = outcome.payload else { return }
+            switch payload {
+            case .catalog(let value): catalog = value
+            case .targeted(let value): targeted = value
+            case .lite(let value): lite = value
+            case .full(let value): full = value
+            }
+        }
+    }
+
+    private func loadSource(
+        id: String,
+        name: String,
+        url: String,
+        operation: @escaping @Sendable () async throws -> SourcePayload
+    ) async throws -> SourceOutcome {
+        let started = Date()
+        do {
+            let payload = try await operation()
+            try Task.checkCancellation()
+            return SourceOutcome(payload: payload, check: sourceCheck(
+                id: id, name: name, url: url, success: true,
+                duration: Date().timeIntervalSince(started), count: payload.count, message: payload.message
+            ))
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return SourceOutcome(payload: nil, check: sourceCheck(
+                id: id, name: name, url: url, success: false,
+                duration: Date().timeIntervalSince(started), count: nil, message: error.localizedDescription
+            ))
+        }
+    }
+
+    private func enrichmentChecks(_ enrichment: EnrichmentRefreshResult, duration: TimeInterval) -> [SourceCheck] {
+        EnrichmentSource.allCases.map { source in
+            let diagnostics = enrichment.diagnostics.filter { $0.source == source }
+            let evidence = enrichment.snapshot.services.values
+            let stale = evidence.contains { $0.freshness == .stale }
+            let bundled = evidence.contains { $0.freshness == .bundled }
+            let cached = evidence.contains { $0.freshness == .cached }
+            let message: String
+            if stale { message = diagnostics.first(where: { $0.freshness == .stale })?.message ?? "Использован просроченный кэш" }
+            else if bundled { message = "Использован включённый снимок" }
+            else if cached { message = "Использован кэш" }
+            else { message = diagnostics.first?.message ?? "Обновлено" }
+            let count = source == .dns
+                ? evidence.reduce(0) { $0 + $1.dnsAddresses.count }
+                : evidence.reduce(0) { $0 + $1.asnPrefixes.count }
+            return sourceCheck(
+                id: source.rawValue,
+                name: source == .dns ? "DNS" : "RIPEstat",
+                url: source == .dns ? "Системный DNS macOS" : "https://stat.ripe.net",
+                success: true, duration: duration, count: count, message: message
+            )
+        }
+    }
+
+    private func sourceCheck(id: String, name: String, url: String, success: Bool, duration: TimeInterval, count: Int?, message: String) -> SourceCheck {
+        SourceCheck(id: id, name: name, url: url, success: success, statusCode: nil, duration: duration, addressCount: count, message: message)
+    }
+
+    private func ordered(_ checks: [SourceCheck]) -> [SourceCheck] {
+        let order = ["metadata", "targeted", "lite", "full", "dns", "ripeStat", "matching", "dns-ripeStat"]
+        return checks.sorted { (order.firstIndex(of: $0.id) ?? 99) < (order.firstIndex(of: $1.id) ?? 99) }
+    }
+}
+
+enum StatePersistence {
+    static func write(_ state: AppState, to folder: URL, rawPreMigrationState: Data?) throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let backup = folder.appendingPathComponent("state-before-v1.4.json")
+        if state.stateVersion >= 14, let rawPreMigrationState,
+           !FileManager.default.fileExists(atPath: backup.path) {
+            try rawPreMigrationState.write(to: backup, options: .atomic)
+        }
+        try JSONEncoder().encode(state).write(to: folder.appendingPathComponent("state.json"), options: .atomic)
+    }
 }
 
 enum CatalogSources {
+    static let metadataRaw = "https://raw.githubusercontent.com/pincetgore/amnezia-app-ru-list/main/config.yaml"
     static let targetedRelease = "https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia.json"
     static let targetedRaw = "https://raw.githubusercontent.com/lib4u/amnezia-tunneling-ru/main/amnezia.json"
     static let liteRelease = "https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia-ip-lite.json"
@@ -576,7 +928,7 @@ func parseRules(_ text: String) -> Rules {
     }
     return result
 }
-struct SourceCheck: Identifiable, Codable {
+struct SourceCheck: Identifiable, Codable, Sendable {
     var id: String
     var name: String
     var url: String
@@ -804,6 +1156,18 @@ actor CatalogLoader {
         guard mode != .targeted else { return [] }
         let (data, actualURL) = try await fetchWithOfficialFallback(source)
         return try decodeAddresses(data, url: actualURL)
+    }
+
+    func loadTargetedRoutes(source: String) async throws -> [TargetedRoute] {
+        let (data, actualURL) = try await fetchWithOfficialFallback(source)
+        let entries: [AmneziaEntry]
+        do { entries = try JSONDecoder().decode([AmneziaEntry].self, from: data) }
+        catch { throw CatalogError.invalidJSON(actualURL, error.localizedDescription) }
+        let routes = Set(entries.flatMap { entry in
+            entry.addresses.map { TargetedRoute(domain: entry.hostname, address: $0) }
+        })
+        guard !routes.isEmpty else { throw CatalogError.empty(actualURL) }
+        return routes.sorted { ($0.address, $0.domain ?? "") < ($1.address, $1.domain ?? "") }
     }
 
     private func decodeAddresses(_ data: Data, url: String) throws -> Set<String> {

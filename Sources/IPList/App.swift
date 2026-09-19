@@ -14,12 +14,9 @@ import UniformTypeIdentifiers
     let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("IPList")
     var timer: Timer?
     var nextRetry = Date.distantPast
+    private var rawPreMigrationState: Data?
     var exportReady: Bool {
-        switch state.mode {
-        case .targeted: return !state.services.isEmpty
-        case .lite: return !state.liteAddresses.isEmpty
-        case .full: return !state.fullAddresses.isEmpty
-        }
+        state.exportReady
     }
     init() {
         do {
@@ -30,6 +27,7 @@ import UniformTypeIdentifiers
                 let backup = folder.appendingPathComponent("state-before-v1.1.json")
                 if !FileManager.default.fileExists(atPath: backup.path) { try data.write(to: backup, options: .atomic) }
                 state = try JSONDecoder().decode(AppState.self, from: data)
+                if state.stateVersion < 14 { rawPreMigrationState = data }
             }
         } catch { self.error = "Не удалось прочитать сохранённые данные: \(error.localizedDescription)" }
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in Task { @MainActor in self?.checkSchedule() } }
@@ -37,11 +35,12 @@ import UniformTypeIdentifiers
         Task { checkSchedule() }
     }
     func checkSchedule() {
-        if state.automatic && !busy && !testingSources && Date() >= nextRetry && Date().timeIntervalSince(state.lastCheck(for: state.mode) ?? .distantPast) >= Double(state.intervalHours) * 3600 { Task { await refresh() } }
+        let lastSuccessfulRefresh = state.lastChecks.values.max() ?? state.lastCheck
+        if state.automatic && !busy && !testingSources && Date() >= nextRetry && Date().timeIntervalSince(lastSuccessfulRefresh ?? .distantPast) >= Double(state.intervalHours) * 3600 { Task { await refresh() } }
     }
     func persist() {
         do {
-            try JSONEncoder().encode(state).write(to: folder.appendingPathComponent("state.json"), options: .atomic)
+            try StatePersistence.write(state, to: folder, rawPreMigrationState: rawPreMigrationState)
             if exportReady { try exportData(state.export).write(to: folder.appendingPathComponent("amnezia-direct.json"), options: .atomic) }
         } catch { self.error = "Не удалось сохранить данные: \(error.localizedDescription)" }
     }
@@ -54,16 +53,26 @@ import UniformTypeIdentifiers
     }
     func select(_ ids: [String], enabled: Bool) {
         let before = state.export
-        for id in ids { if enabled { state.selected.insert(id) } else { state.selected.remove(id) } }
-        state.selectionInitialized = true
-        state.selectAllByDefault = !state.services.isEmpty && Set(state.services.map(\.id)).isSubset(of: state.selected)
+        if state.catalog != nil {
+            state.setCatalogSelection(ids, enabled: enabled)
+        } else {
+            for id in ids { if enabled { state.selected.insert(id) } else { state.selected.remove(id) } }
+            state.selectionInitialized = true
+            state.selectAllByDefault = !state.services.isEmpty && Set(state.services.map(\.id)).isSubset(of: state.selected)
+        }
         selectedProfileID = nil
         record(before: before, reason: "Изменён выбор сервисов"); persist()
     }
     func selectAll(_ enabled: Bool) {
         let before = state.export
-        state.selected = enabled ? Set(state.services.map(\.id)) : []
-        state.selectAllByDefault = enabled; state.selectionInitialized = true; selectedProfileID = nil
+        if let catalog = state.catalog {
+            state.setCatalogSelection(catalog.services.map(\.id), enabled: enabled)
+        } else {
+            state.selected = enabled ? Set(state.services.map(\.id)) : []
+            state.selectAllByDefault = enabled
+            state.selectionInitialized = true
+        }
+        selectedProfileID = nil
         record(before: before, reason: enabled ? "Выбраны все категории" : "Снят выбор всех категорий"); persist()
     }
     func setMode(_ mode: ExportMode) {
@@ -79,21 +88,26 @@ import UniformTypeIdentifiers
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { error = "Введите название профиля"; return }
         guard !state.profiles.contains(where: { $0.name.caseInsensitiveCompare(clean) == .orderedSame }) else { error = "Профиль с таким именем уже есть. Используйте обновление профиля."; return }
-        state.profiles.append(SelectionProfile(name: clean, selected: state.selected, mode: state.mode, manualEnabled: state.manualEnabled, selectAllByDefault: state.selectAllByDefault))
+        state.saveProfile(name: clean)
         selectedProfileID = state.profiles.last?.id; persist(); message = "Профиль «\(clean)» сохранён."
     }
     func updateProfile(_ id: UUID) {
         guard let index = state.profiles.firstIndex(where: { $0.id == id }) else { return }
-        state.profiles[index].selected = state.selected; state.profiles[index].mode = state.mode
-        state.profiles[index].manualEnabled = state.manualEnabled; state.profiles[index].selectAllByDefault = state.selectAllByDefault
+        state.profiles[index] = SelectionProfile(
+            id: id,
+            name: state.profiles[index].name,
+            selected: state.selectedCatalogIDs,
+            selectedUnassignedModes: state.selectedUnassignedModes,
+            mode: state.mode,
+            manualEnabled: state.manualEnabled,
+            selectAllByDefault: state.selectAllByDefault
+        )
         selectedProfileID = id; persist(); message = "Профиль обновлён."
     }
     func applyProfile(_ id: UUID) {
         guard !busy, let profile = state.profiles.first(where: { $0.id == id }) else { return }
         let before = state.export
-        state.selected = profile.selected.intersection(Set(state.services.map(\.id)))
-        state.mode = profile.mode; state.manualEnabled = profile.manualEnabled
-        state.selectAllByDefault = profile.selectAllByDefault; state.selectionInitialized = true
+        guard state.applyProfile(id: id) else { return }
         selectedProfileID = id; nextRetry = .distantPast
         record(before: before, reason: "Применён профиль «\(profile.name)»"); persist()
         message = "Профиль «\(profile.name)» применён." + (exportReady ? "" : " Загрузите выбранный список кнопкой «Проверить сейчас».")
@@ -163,47 +177,66 @@ import UniformTypeIdentifiers
     func refresh() async {
         guard !busy && !testingSources else { return }; busy = true; defer { busy = false }
         error = nil
-        let mode = state.mode
-        message = "Загружаю «\(mode.title)»…"
+        message = "Обновляю каталог, три списка адресов, DNS и RIPEstat…"
         do {
-            let loader = CatalogLoader()
             let before = state.export
-            let oldAll: Set<String>
-            let newAll: Set<String>
-            let first = state.lastCheck(for: mode) == nil
-            switch mode {
-            case .targeted:
-                let services = try await loader.load(source: state.sourceURL, base: state.categoryBaseURL) { [weak self] status in Task { @MainActor in self?.message = status } }
-                oldAll = Set(state.services.flatMap(\.addresses)); newAll = Set(services.flatMap(\.addresses))
-                state.applyCatalog(services)
-            case .lite:
-                let addresses = try await loader.loadRanges(mode: mode, source: state.liteSourceURL)
-                oldAll = Set(state.liteAddresses); newAll = Set(addresses); state.liteAddresses = newAll
-            case .full:
-                let addresses = try await loader.loadRanges(mode: mode, source: state.fullSourceURL)
-                oldAll = Set(state.fullAddresses); newAll = Set(addresses); state.fullAddresses = newAll
+            let previousSources = sourceRoutes()
+            let wasFirstRefresh = state.lastChecks.isEmpty && state.lastCheck == nil
+            let transaction = try await RefreshPipeline.live().run(RefreshRequest(state: state))
+            try Task.checkCancellation()
+            guard state.applyRefreshTransaction(transaction) else {
+                throw RefreshPipelineError.validationFailure(transaction.sourceChecks, "Полученный каталог нельзя безопасно применить.")
             }
-            state.markChecked(mode); nextRetry = .distantPast
-            record(before: before, reason: first ? "Первая загрузка: \(mode.title)" : "Обновление: \(mode.title)")
-            if !first {
-                let added = newAll.subtracting(oldAll).sorted(), removed = oldAll.subtracting(newAll).sorted()
-                if !added.isEmpty || !removed.isEmpty {
-                    state.changes.insert(Change(added: added, removed: removed, reason: "Источник: \(mode.title)"), at: 0)
-                    state.changes = Array(state.changes.prefix(100))
-                    state.hasUnseenChanges = true
-                }
-                if !added.isEmpty || !removed.isEmpty || before != state.export {
-                    let content = UNMutableNotificationContent(); content.title = "IPList: список изменился"
-                    content.body = "Источник: +\(added.count), −\(removed.count). Выгрузка: +\(state.export.subtracting(before).count), −\(before.subtracting(state.export).count)."
-                    try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
-                }
+            sourceChecks = transaction.sourceChecks
+            nextRetry = .distantPast
+            record(before: before, reason: wasFirstRefresh ? "Первая загрузка всех источников" : "Обновление всех источников")
+            let changedSources = recordSourceChanges(before: previousSources, after: transaction.sourceRoutes)
+            if !wasFirstRefresh && (changedSources.added > 0 || changedSources.removed > 0 || before != state.export) {
+                let content = UNMutableNotificationContent()
+                content.title = "IPList: список изменился"
+                content.body = "Источники: +\(changedSources.added), −\(changedSources.removed). Выгрузка: +\(state.export.subtracting(before).count), −\(before.subtracting(state.export).count)."
+                try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
             }
-            persist(); message = "Проверка завершена: \(mode.title), \(newAll.count) IPv4 / диапазонов. В выгрузке: \(state.export.count)."
+            persist()
+            let activeCount = transaction.sourceRoutes[state.mode]?.count ?? state.export.count
+            message = "Обновлены все источники. «\(state.mode.title)»: \(activeCount) IPv4 / диапазонов; в выгрузке: \(state.export.count)."
         } catch {
+            if let refreshError = error as? RefreshPipelineError { sourceChecks = refreshError.sourceChecks }
             nextRetry = Date().addingTimeInterval(15 * 60)
             self.error = error.localizedDescription
             message = "Обновление не выполнено. Предыдущие данные сохранены. Проверьте источники в настройках."
         }
+    }
+
+    private func sourceRoutes() -> [ExportMode: Set<String>] {
+        if let catalog = state.catalog {
+            return [
+                .targeted: Set(catalog.services.flatMap(\.targetedAddresses)).union(state.unassignedRoutes[.targeted] ?? []),
+                .lite: Set(catalog.services.flatMap(\.liteAddresses)).union(state.unassignedRoutes[.lite] ?? []),
+                .full: Set(catalog.services.flatMap(\.fullAddresses)).union(state.unassignedRoutes[.full] ?? [])
+            ]
+        }
+        return [
+            .targeted: Set(state.services.flatMap(\.addresses)),
+            .lite: state.liteAddresses,
+            .full: state.fullAddresses
+        ]
+    }
+
+    @discardableResult private func recordSourceChanges(before: [ExportMode: Set<String>], after: [ExportMode: Set<String>]) -> (added: Int, removed: Int) {
+        var totalAdded = 0
+        var totalRemoved = 0
+        for mode in ExportMode.allCases {
+            let added = (after[mode] ?? []).subtracting(before[mode] ?? []).sorted()
+            let removed = (before[mode] ?? []).subtracting(after[mode] ?? []).sorted()
+            guard !added.isEmpty || !removed.isEmpty else { continue }
+            totalAdded += added.count
+            totalRemoved += removed.count
+            state.changes.insert(Change(added: added, removed: removed, reason: "Источник: \(mode.title)"), at: 0)
+            state.hasUnseenChanges = true
+        }
+        state.changes = Array(state.changes.prefix(100))
+        return (totalAdded, totalRemoved)
     }
     func exportFile() {
         guard exportReady else { error = "Сначала загрузите данные выбранного режима кнопкой «Проверить сейчас»."; return }
