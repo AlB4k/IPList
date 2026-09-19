@@ -1,6 +1,6 @@
 # Task 3 loader implementation report
 
-Implementation commits: `4eba7852fcd046f3c468c4f50141f1514631c4a4` (`feat: load licensed service metadata catalog`) and `26ad6a0a0888e1f02b3b635b3fd38b9621f791b9` (`fix: preserve legacy catalog decoding`).
+Implementation commits: `4eba7852fcd046f3c468c4f50141f1514631c4a4` (`feat: load licensed service metadata catalog`), `26ad6a0a0888e1f02b3b635b3fd38b9621f791b9` (`fix: preserve legacy catalog decoding`), and `3f274e63472685fc3be855f67483fb243bffc853` (`fix: harden service catalog loading`).
 
 ## Interfaces
 
@@ -13,7 +13,7 @@ Stable IDs use the source identifier `pincetgore/amnezia-app-ru-list` and a norm
 
 ## Validation limits
 
-The parser enforces a 4 MiB input limit, 2,000 services, 20,000 domains, 20,000 explicit ranges, 20,000 ASN entries, and 512 UTF-8 bytes per text/item field. It rejects empty catalogs, empty service names, services with no metadata, invalid ASN values, invalid IPv4 ranges, malformed bounded arrays, and stable-ID collisions. IPv4 host bits are normalized while parsing ranges.
+The parser enforces a 4 MiB input limit, 2,000 services, 20,000 domains, 20,000 explicit ranges, 20,000 ASN entries, and 512 UTF-8 bytes per text/item field. It rejects empty catalogs, empty service names, services with no metadata, invalid ASN values, invalid IPv4 ranges, scalar known-list fields, opened empty block lists, malformed bounded arrays, and stable-ID collisions. IPv4 host bits are normalized while parsing ranges. Category metadata is recognized only in the upstream divider / uppercase-heading / divider shape; ordinary, incomplete, or unsupported comments assign the next service to `Без категории`.
 
 The loader enforces an absolute minimum of one service by default (configurable) and rejects a candidate below 50% of the previous successful catalog by default (also configurable). A valid fallback is only published after the same validation.
 
@@ -25,8 +25,8 @@ The loader enforces an absolute minimum of one service by default (configurable)
 - `swift build` — passed; existing linker search-path warnings remain from the local toolchain setup.
 - `git diff --check` — passed for the implementation commit.
 
-The isolated `Tests/CatalogChecks.swift` covers Aeroflot parsing and category normalization, unknown-field state isolation, invalid ASN/range rejection, stable-ID collisions, relative shrink rejection, legacy Codable defaults, remote failure with cached fallback, and remote failure without fallback.
+The isolated `Tests/CatalogChecks.swift` covers Aeroflot parsing and category normalization, unknown-field state isolation, category-comment regressions, invalid ASN/range rejection, scalar and empty-list rejection, stable-ID collisions, relative shrink rejection, legacy Codable defaults, remote failure with cached fallback, last-successful-catalog precedence, remote failure without fallback, and the environment-gated live source check.
 
 ## Gaps and handoff
 
-The live upstream YAML, enrichment snapshot, license file, build-app resource copy, notices update, and live-network test remain with the separate source-preparation task. `Tests/CoreChecks.swift` and `scripts/test.sh` were not edited. Enrichment, route matching, migration, and persistence are subsequent tasks.
+The live upstream YAML, enrichment snapshot, license file, build-app resource copy, and notices update remain with the separate source-preparation/enrichment tasks. `Tests/CoreChecks.swift` was not edited. `scripts/test.sh` now runs the standalone deterministic catalog harness; its existing CoreChecks phase is currently blocked by the other agent's in-progress `CoreChecks.swift`/CIDR work (`[Any]` versus `IPv4Network` compile error). Direct catalog checks, the live check with `IPLIST_LIVE_TEST=1`, and `swift build` pass. Enrichment, route matching, migration, and persistence are subsequent tasks.
