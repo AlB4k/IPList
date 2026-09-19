@@ -32,7 +32,7 @@ func allowedIPv4Routes(in config: String) -> [IPv4Network] {
 @main struct CoreTests {
     static func main() async throws {
         let tests = CoreTests()
-        tests.testIPv4AndCIDR(); tests.testIPv4NetworkSetOperations(); tests.testIPv4NetworkReferenceOracle(); tests.testAllowedIPsFormattingDeduplicatesExistingCoverage(); try tests.testAmneziaWGParsePreservesUnchangedBytes(); try tests.testAmneziaWGOperationsNormalizeRoutes(); try tests.testAmneziaWGRejectsUnsafeConfigurationsWithoutLeakingKeys(); try tests.testAmneziaWGLargeRouteRegression(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testCatalogDefaults(); tests.testManualGroups(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
+        tests.testIPv4AndCIDR(); tests.testIPv4NetworkSetOperations(); tests.testIPv4NetworkReferenceOracle(); tests.testAllowedIPsFormattingDeduplicatesExistingCoverage(); try tests.testAmneziaWGParsePreservesUnchangedBytes(); try tests.testAmneziaWGPreservesAllowedIPSuffixesAndOpaqueValues(); try tests.testAmneziaWGOperationsNormalizeRoutes(); try tests.testAmneziaWGRejectsUnsafeConfigurationsWithoutLeakingKeys(); try tests.testAmneziaWGLargeRouteRegression(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testCatalogDefaults(); tests.testManualGroups(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
         print("All checks passed")
     }
     func testIPv4AndCIDR() {
@@ -105,6 +105,17 @@ func allowedIPv4Routes(in config: String) -> [IPv4Network] {
         XCTAssertTrue(edited.hasSuffix("Endpoint = vpn.example.test:51820\r\n"))
         XCTAssertTrue(edited.contains("PresharedKey = PRESHARED-SECRET-DO-NOT-LOG\r\n"))
         XCTAssertEqual(edited, "\u{FEFF}# retained header = exact\r\n[Interface]\r\nPrivateKey = PRIVATE-SECRET-DO-NOT-LOG\r\nJc = 4\r\nHeaderProtectionKey = unchanged\r\n\r\n[Peer]\r\nPublicKey = FIRST-PEER\r\nAllowedIPs = 10.0.0.0/8\r\n\r\n[Peer]\r\n# selected peer\r\nPublicKey = SECOND-PEER\r\nPresharedKey = PRESHARED-SECRET-DO-NOT-LOG\r\nAllowedIPs = 10.0.0.0/8, 192.0.2.0/24\r\nEndpoint = vpn.example.test:51820\r\n")
+    }
+    func testAmneziaWGPreservesAllowedIPSuffixesAndOpaqueValues() throws {
+        let hashComment = "[Interface]\nPrivateKey = private\nOpaqueSetting = must-stay]\n[Peer]\nPublicKey = peer\nAllowedIPs = 10.0.0.0/8\t  # keep these spaces\n"
+        let hashEdited = try AmneziaWGDocument.parse(hashComment)
+            .render(peer: 0, operation: .add, routes: ["192.0.2.0/24"], preserveIPv6: true)
+        XCTAssertEqual(hashEdited, "[Interface]\nPrivateKey = private\nOpaqueSetting = must-stay]\n[Peer]\nPublicKey = peer\nAllowedIPs = 10.0.0.0/8, 192.0.2.0/24\t  # keep these spaces\n")
+
+        let semicolonComment = "[Interface]\r\nPrivateKey = private\r\n[Peer]\r\nPublicKey = peer\r\nAllowedIPs = 10.0.0.0/8   ; preserve this suffix\r\n"
+        let semicolonEdited = try AmneziaWGDocument.parse(semicolonComment)
+            .render(peer: 0, operation: .add, routes: ["192.0.2.0/24"], preserveIPv6: true)
+        XCTAssertEqual(semicolonEdited, "[Interface]\r\nPrivateKey = private\r\n[Peer]\r\nPublicKey = peer\r\nAllowedIPs = 10.0.0.0/8, 192.0.2.0/24   ; preserve this suffix\r\n")
     }
     func testAmneziaWGOperationsNormalizeRoutes() throws {
         let config = "[Interface]\nPrivateKey = interface-key\n\n[Peer]\nPublicKey = peer-key\nAllowedIPs = 0.0.0.0/0, 2001:db8::/32\n"

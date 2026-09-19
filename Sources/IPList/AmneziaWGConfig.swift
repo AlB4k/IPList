@@ -215,9 +215,12 @@ private extension AmneziaWGDocument {
             guard remainder[index] == "#" || remainder[index] == ";" else { return false }
             return index == remainder.startIndex || remainder[remainder.index(before: index)].isWhitespace
         }
-        let valuePart = comment.map { String(remainder[..<$0]) } ?? String(remainder)
-        let suffix = comment.map { " " + String(remainder[$0...]) } ?? ""
-        return Line(text: text, ending: ending, key: key, value: valuePart.trimmingCharacters(in: .whitespacesAndNewlines),
+        let valueRegion = comment.map { remainder[..<$0] } ?? remainder
+        let valueEnd = valueRegion.lastIndex(where: { !$0.isWhitespace })
+            .map { valueRegion.index(after: $0) } ?? valueRegion.startIndex
+        let value = String(valueRegion[..<valueEnd])
+        let suffix = String(remainder[valueEnd...])
+        return Line(text: text, ending: ending, key: key, value: value,
                     prefix: prefix, suffix: suffix)
     }
 
@@ -226,13 +229,13 @@ private extension AmneziaWGDocument {
         for (index, line) in lines.enumerated() {
             let effective = line.text.hasPrefix("\u{FEFF}") ? String(line.text.dropFirst()) : line.text
             let trimmed = effective.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.hasPrefix("[") || trimmed.hasSuffix("]") {
-                let kind: SectionKind
-                switch trimmed {
-                case "[Interface]": kind = .interface
-                case "[Peer]": kind = .peer
-                default: throw AmneziaWGConfigError.invalidStructure
-                }
+            let kind: SectionKind?
+            switch trimmed {
+            case "[Interface]": kind = .interface
+            case "[Peer]": kind = .peer
+            default: kind = nil
+            }
+            if let kind {
                 starts.append((kind, index))
             } else if line.key != nil, starts.isEmpty {
                 throw AmneziaWGConfigError.invalidStructure
