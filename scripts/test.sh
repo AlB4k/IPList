@@ -18,6 +18,9 @@ done
 swiftc -parse-as-library "${available_sources[@]}" Tests/CoreChecks.swift -o .build/checks/core-checks
 .build/checks/core-checks
 
+swiftc -parse-as-library "${available_sources[@]}" Tests/StateChecks.swift -o .build/checks/state-checks
+.build/checks/state-checks
+
 catalog_sources=(
   Sources/IPList/CatalogModels.swift
   Sources/IPList/ServiceCatalogLoader.swift

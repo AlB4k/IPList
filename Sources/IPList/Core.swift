@@ -19,12 +19,46 @@ func normalizeIP(_ raw: String) -> String? {
     let ip = [24,16,8,0].map { String((value >> $0) & 255) }.joined(separator: ".")
     return prefix == 32 ? ip : "\(ip)/\(prefix)"
 }
-struct Service: Codable, Identifiable {
+struct Service: Codable, Identifiable, Equatable {
     var id: String
     var name: String
     var category: String
     var domains: [String]
+    var asn: [Int] = []
     var addresses: [String]
+
+    init(id: String, name: String, category: String, domains: [String], asn: [Int] = [], addresses: [String]) {
+        self.id = id
+        self.name = name
+        self.category = category
+        self.domains = domains
+        self.asn = asn
+        self.addresses = addresses
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, category, domains, asn, asns, addresses }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decode(String.self, forKey: .id),
+            name: try c.decode(String.self, forKey: .name),
+            category: try c.decodeIfPresent(String.self, forKey: .category) ?? "Без категории",
+            domains: try c.decodeIfPresent([String].self, forKey: .domains) ?? [],
+            asn: try c.decodeIfPresent([Int].self, forKey: .asn) ?? (try c.decodeIfPresent([Int].self, forKey: .asns)) ?? [],
+            addresses: try c.decodeIfPresent([String].self, forKey: .addresses) ?? []
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(category, forKey: .category)
+        try c.encode(domains, forKey: .domains)
+        try c.encode(asn, forKey: .asn)
+        try c.encode(addresses, forKey: .addresses)
+    }
 }
 struct Change: Codable, Identifiable {
     var id = UUID()
@@ -73,20 +107,91 @@ struct ManualEntry: Codable, Identifiable, Equatable {
     var address: String
     var groupID: UUID?
     var note: String = ""
+
+    private enum CodingKeys: String, CodingKey { case id, address, groupID, note }
+
+    init(id: UUID = UUID(), address: String, groupID: UUID? = nil, note: String = "") {
+        self.id = id
+        self.address = address
+        self.groupID = groupID
+        self.note = note
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
+            address: try c.decode(String.self, forKey: .address),
+            groupID: try c.decodeIfPresent(UUID.self, forKey: .groupID),
+            note: try c.decodeIfPresent(String.self, forKey: .note) ?? ""
+        )
+    }
 }
 
 struct SelectionProfile: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
     var name: String
     var selected: Set<String>
+    var selectedUnassignedModes: Set<CatalogRouteMode> = Set(CatalogRouteMode.allCases)
     var mode: ExportMode
     var manualEnabled: Bool
     var selectAllByDefault: Bool
+
+    var selectedCatalogIDs: Set<String> {
+        get { selected }
+        set { selected = newValue }
+    }
+
+    init(id: UUID = UUID(), name: String, selected: Set<String>, selectedUnassignedModes: Set<CatalogRouteMode> = Set(CatalogRouteMode.allCases), mode: ExportMode, manualEnabled: Bool, selectAllByDefault: Bool) {
+        self.id = id
+        self.name = name
+        self.selected = selected
+        self.selectedUnassignedModes = selectedUnassignedModes
+        self.mode = mode
+        self.manualEnabled = manualEnabled
+        self.selectAllByDefault = selectAllByDefault
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, selected, selectedCatalogIDs, selectedUnassignedModes, mode, manualEnabled, selectAllByDefault }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
+            name: try c.decodeIfPresent(String.self, forKey: .name) ?? "",
+            selected: try c.decodeIfPresent(Set<String>.self, forKey: .selectedCatalogIDs) ?? (try c.decodeIfPresent(Set<String>.self, forKey: .selected)) ?? [],
+            selectedUnassignedModes: try c.decodeIfPresent(Set<CatalogRouteMode>.self, forKey: .selectedUnassignedModes) ?? Set(CatalogRouteMode.allCases),
+            mode: try c.decodeIfPresent(ExportMode.self, forKey: .mode) ?? .targeted,
+            manualEnabled: try c.decodeIfPresent(Bool.self, forKey: .manualEnabled) ?? true,
+            selectAllByDefault: try c.decodeIfPresent(Bool.self, forKey: .selectAllByDefault) ?? true
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(selected, forKey: .selected)
+        try c.encode(selected, forKey: .selectedCatalogIDs)
+        try c.encode(selectedUnassignedModes, forKey: .selectedUnassignedModes)
+        try c.encode(mode, forKey: .mode)
+        try c.encode(manualEnabled, forKey: .manualEnabled)
+        try c.encode(selectAllByDefault, forKey: .selectAllByDefault)
+    }
 }
 
 struct AppState: Codable {
+    /// 13 denotes a decoded legacy state.  The state moves to 14 only after a
+    /// complete matched catalog has been accepted.
+    var stateVersion = 14
     var services: [Service] = []
     var selected: Set<String> = []
+    var catalog: ServiceCatalog?
+    var selectedCatalogIDs: Set<String> = []
+    var selectedUnassignedModes: Set<CatalogRouteMode> = Set(CatalogRouteMode.allCases)
+    var unassignedRoutes: [CatalogRouteMode: [String]] = [:]
+    var cachedEnrichment: EnrichmentSnapshot?
+    var migrationDiagnostics: [StateMigrationDiagnostic] = []
     var manual: [ManualEntry] = []
     var manualGroups: [IPGroup] = []
     var manualEnabled = true
@@ -110,18 +215,47 @@ struct AppState: Codable {
     var hasUnseenChanges = false
 
     var export: Set<String> {
+        exportRoutes(for: mode)
+    }
+
+    func exportRoutes(for mode: ExportMode) -> Set<String> {
+        let catalogMode = CatalogRouteMode(rawValue: mode.rawValue)!
         let automaticAddresses: Set<String>
-        switch mode {
-        case .targeted:
-            automaticAddresses = Set(services.filter { selected.contains($0.id) }.flatMap(\.addresses))
-        case .lite:
-            automaticAddresses = liteAddresses
-        case .full:
-            automaticAddresses = fullAddresses
+        if let catalog {
+            automaticAddresses = Set(catalog.services
+                .filter { selectedCatalogIDs.contains($0.id) }
+                .flatMap { service in
+                    switch catalogMode {
+                    case .targeted: return service.targetedAddresses
+                    case .lite: return service.liteAddresses
+                    case .full: return service.fullAddresses
+                    }
+                })
+                .union(selectedUnassignedModes.contains(catalogMode) ? Set(unassignedRoutes[catalogMode] ?? []) : [])
+        } else {
+            switch mode {
+            case .targeted:
+                automaticAddresses = Set(services.filter { selected.contains($0.id) }.flatMap(\.addresses))
+            case .lite:
+                automaticAddresses = liteAddresses
+            case .full:
+                automaticAddresses = fullAddresses
+            }
         }
         return automaticAddresses.union(manualEnabled ? Set(manual.map(\.address)) : [])
     }
     var exportReady: Bool {
+        if let catalog {
+            let catalogMode = CatalogRouteMode(rawValue: mode.rawValue)!
+            let routes = catalog.services.flatMap { service -> [String] in
+                switch catalogMode {
+                case .targeted: return service.targetedAddresses
+                case .lite: return service.liteAddresses
+                case .full: return service.fullAddresses
+                }
+            } + (unassignedRoutes[catalogMode] ?? [])
+            return !routes.isEmpty
+        }
         switch mode {
         case .targeted: return !services.isEmpty
         case .lite: return !liteAddresses.isEmpty
@@ -144,6 +278,85 @@ struct AppState: Codable {
             }
         }
         services = catalog
+        selectedCatalogIDs = selected
+    }
+
+    /// Accepts a complete matcher result in one assignment.  The method does
+    /// not mutate legacy state when the candidate cannot be represented safely.
+    @discardableResult mutating func applyMatchedCatalog(_ matched: MatchedCatalog, cachedEnrichment: EnrichmentSnapshot? = nil) -> Bool {
+        let incomingIDs = matched.catalog.services.map(\.id)
+        guard Set(incomingIDs).count == incomingIDs.count,
+              matched.routesByMode.values.allSatisfy({ Set($0.keys).isSubset(of: Set(incomingIDs)) }) else {
+            return false
+        }
+
+        var incoming = matched.catalog.services
+        for index in incoming.indices {
+            let id = incoming[index].id
+            if let routes = matched.routesByMode[.targeted]?[id] { incoming[index].targetedAddresses = routes }
+            if let routes = matched.routesByMode[.lite]?[id] { incoming[index].liteAddresses = routes }
+            if let routes = matched.routesByMode[.full]?[id] { incoming[index].fullAddresses = routes }
+        }
+        let previous = catalog?.services ?? services.map { legacy in
+            CatalogService(id: legacy.id, name: legacy.name, category: legacy.category, domains: legacy.domains, asn: legacy.asn, targetedAddresses: legacy.addresses)
+        }
+        let resolution = Self.resolveLegacyServices(previous, against: incoming)
+        let finalServices = incoming + resolution.unmatched
+        let currentSelection = catalog == nil ? selected : selectedCatalogIDs
+        let newSelection = Self.migratedSelection(
+            selected: currentSelection,
+            incomingIDs: Set(incomingIDs),
+            resolution: resolution,
+            selectAllByDefault: selectAllByDefault
+        )
+        let newProfiles = profiles.map { profile -> SelectionProfile in
+            var migrated = profile
+            migrated.selectedCatalogIDs = Self.migratedSelection(
+                selected: profile.selectedCatalogIDs,
+                incomingIDs: Set(incomingIDs),
+                resolution: resolution,
+                selectAllByDefault: profile.selectAllByDefault
+            )
+            return migrated
+        }
+        let finalCatalog = ServiceCatalog(services: finalServices, freshness: matched.catalog.freshness, sourceURL: matched.catalog.sourceURL, loadedAt: matched.catalog.loadedAt)
+        let compatibilityServices = finalServices.map { service in
+            Service(id: service.id, name: service.name, category: service.category, domains: service.domains, asn: service.asn, addresses: service.targetedAddresses)
+        }
+        let newLiteAddresses = Set(finalServices.flatMap(\.liteAddresses)).union(matched.unassignedRoutes[.lite] ?? [])
+        let newFullAddresses = Set(finalServices.flatMap(\.fullAddresses)).union(matched.unassignedRoutes[.full] ?? [])
+
+        stateVersion = 14
+        catalog = finalCatalog
+        services = compatibilityServices
+        selectedCatalogIDs = newSelection
+        selected = newSelection // Retained for 1.3 UI/state compatibility.
+        unassignedRoutes = matched.unassignedRoutes
+        self.cachedEnrichment = cachedEnrichment ?? self.cachedEnrichment
+        migrationDiagnostics = resolution.diagnostics
+        profiles = newProfiles
+        liteAddresses = newLiteAddresses
+        fullAddresses = newFullAddresses
+        selectionInitialized = true
+        return true
+    }
+
+    mutating func setCatalogSelection(_ ids: some Sequence<String>, enabled: Bool) {
+        for id in ids {
+            if enabled { selectedCatalogIDs.insert(id) } else { selectedCatalogIDs.remove(id) }
+        }
+        selected = selectedCatalogIDs
+        selectionInitialized = true
+        selectAllByDefault = catalog.map { Set($0.services.map(\.id)).isSubset(of: selectedCatalogIDs) } ?? false
+    }
+
+    mutating func setCategorySelection(_ category: String, enabled: Bool) {
+        setCatalogSelection((catalog?.services ?? []).filter { $0.category == category }.map(\.id), enabled: enabled)
+    }
+
+    mutating func setUnassignedSelection(_ mode: ExportMode, enabled: Bool) {
+        let catalogMode = CatalogRouteMode(rawValue: mode.rawValue)!
+        if enabled { selectedUnassignedModes.insert(catalogMode) } else { selectedUnassignedModes.remove(catalogMode) }
     }
 
     mutating func saveProfile(name: String) {
@@ -151,16 +364,19 @@ struct AppState: Codable {
         guard !clean.isEmpty else { return }
         if let index = profiles.firstIndex(where: { $0.name.caseInsensitiveCompare(clean) == .orderedSame }) {
             let id = profiles[index].id
-            profiles[index] = SelectionProfile(id: id, name: clean, selected: selected, mode: mode, manualEnabled: manualEnabled, selectAllByDefault: selectAllByDefault)
+            profiles[index] = SelectionProfile(id: id, name: clean, selected: selectedCatalogIDs, selectedUnassignedModes: selectedUnassignedModes, mode: mode, manualEnabled: manualEnabled, selectAllByDefault: selectAllByDefault)
         } else {
-            profiles.append(SelectionProfile(name: clean, selected: selected, mode: mode, manualEnabled: manualEnabled, selectAllByDefault: selectAllByDefault))
+            profiles.append(SelectionProfile(name: clean, selected: selectedCatalogIDs, selectedUnassignedModes: selectedUnassignedModes, mode: mode, manualEnabled: manualEnabled, selectAllByDefault: selectAllByDefault))
         }
         profiles.sort { $0.name.caseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     @discardableResult mutating func applyProfile(id: UUID) -> Bool {
         guard let profile = profiles.first(where: { $0.id == id }) else { return false }
-        selected = profile.selected.intersection(Set(services.map(\.id)))
+        let knownIDs = Set((catalog?.services.map(\.id) ?? services.map(\.id)))
+        selectedCatalogIDs = profile.selectedCatalogIDs.intersection(knownIDs)
+        selected = selectedCatalogIDs
+        selectedUnassignedModes = profile.selectedUnassignedModes
         mode = profile.mode
         manualEnabled = profile.manualEnabled
         selectAllByDefault = profile.selectAllByDefault
@@ -194,7 +410,8 @@ struct AppState: Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case services, selected, manual, manualEnabled, changes, lastCheck, intervalHours, automatic
+        case stateVersion, services, selected, catalog, selectedCatalogIDs, selectedUnassignedModes, unassignedRoutes, cachedEnrichment, migrationDiagnostics
+        case manual, manualEnabled, changes, lastCheck, intervalHours, automatic
         case sourceURL, categoryBaseURL, liteSourceURL, fullSourceURL, mode, liteAddresses, fullAddresses
         case profiles, selectionInitialized, selectAllByDefault, lastChecks
         case dockIconVisible, menuBarIconVisible, hasUnseenChanges
@@ -205,8 +422,15 @@ struct AppState: Codable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        stateVersion = try c.decodeIfPresent(Int.self, forKey: .stateVersion) ?? 13
         services = try c.decodeIfPresent([Service].self, forKey: .services) ?? []
         selected = try c.decodeIfPresent(Set<String>.self, forKey: .selected) ?? []
+        catalog = try c.decodeIfPresent(ServiceCatalog.self, forKey: .catalog)
+        selectedCatalogIDs = try c.decodeIfPresent(Set<String>.self, forKey: .selectedCatalogIDs) ?? selected
+        selectedUnassignedModes = try c.decodeIfPresent(Set<CatalogRouteMode>.self, forKey: .selectedUnassignedModes) ?? Set(CatalogRouteMode.allCases)
+        unassignedRoutes = try c.decodeIfPresent([CatalogRouteMode: [String]].self, forKey: .unassignedRoutes) ?? [:]
+        cachedEnrichment = try c.decodeIfPresent(EnrichmentSnapshot.self, forKey: .cachedEnrichment)
+        migrationDiagnostics = try c.decodeIfPresent([StateMigrationDiagnostic].self, forKey: .migrationDiagnostics) ?? []
         if let entries = try? c.decodeIfPresent([ManualEntry].self, forKey: .manual) {
             manual = entries
         } else {
@@ -237,7 +461,7 @@ struct AppState: Codable {
         if c.contains(.selectionInitialized) {
             selectionInitialized = try c.decode(Bool.self, forKey: .selectionInitialized)
         } else {
-            let knownIDs = Set(services.map(\.id))
+            let knownIDs = Set((catalog?.services ?? services.map { CatalogService(id: $0.id, name: $0.name) }).map(\.id))
             if selected.isEmpty && !knownIDs.isEmpty {
                 // Earlier releases started with an empty set. Migrate it immediately
                 // so a temporarily unavailable network does not leave the catalog off.
@@ -252,6 +476,63 @@ struct AppState: Codable {
                 selectAllByDefault = selected.isEmpty || knownIDs.isSubset(of: selected)
             }
         }
+        if catalog == nil { selectedCatalogIDs = selected }
+    }
+
+    private struct LegacyResolution {
+        var mappings: [String: String]
+        var unmatched: [CatalogService]
+        var diagnostics: [StateMigrationDiagnostic]
+    }
+
+    private static func resolveLegacyServices(_ old: [CatalogService], against incoming: [CatalogService]) -> LegacyResolution {
+        let incomingByID = Dictionary(uniqueKeysWithValues: incoming.map { ($0.id, $0) })
+        var mappings: [String: String] = [:]
+        let unresolved = old.filter { oldService in
+            guard incomingByID[oldService.id] != nil else { return true }
+            mappings[oldService.id] = oldService.id
+            return false
+        }
+        var potential: [String: [String]] = [:]
+        for oldService in unresolved {
+            potential[oldService.id] = incoming.filter { hasHighConfidenceOverlap(oldService, $0) }.map(\.id)
+        }
+        var originsByCandidate: [String: [String]] = [:]
+        for (oldID, candidates) in potential where candidates.count == 1 {
+            originsByCandidate[candidates[0], default: []].append(oldID)
+        }
+        var diagnostics: [StateMigrationDiagnostic] = []
+        var mappedOldIDs: Set<String> = Set(mappings.keys)
+        for oldService in unresolved {
+            let candidates = potential[oldService.id] ?? []
+            if candidates.count == 1, originsByCandidate[candidates[0]]?.count == 1 {
+                mappings[oldService.id] = candidates[0]
+                mappedOldIDs.insert(oldService.id)
+            } else if candidates.count > 1 || (candidates.count == 1 && (originsByCandidate[candidates[0]]?.count ?? 0) > 1) {
+                diagnostics.append(StateMigrationDiagnostic(
+                    legacyServiceID: oldService.id,
+                    candidateServiceIDs: candidates,
+                    message: "Выбор не перенесён: соответствие старого сервиса неоднозначно."
+                ))
+            }
+        }
+        let unmatched = unresolved.filter { !mappedOldIDs.contains($0.id) }.map { oldService in
+            CatalogService(id: oldService.id, name: oldService.name, category: "Дополнительные ресурсы lib4u", domains: oldService.domains, asn: oldService.asn, ipRanges: oldService.ipRanges, targetedAddresses: oldService.targetedAddresses, liteAddresses: oldService.liteAddresses, fullAddresses: oldService.fullAddresses)
+        }
+        return LegacyResolution(mappings: mappings, unmatched: unmatched, diagnostics: diagnostics)
+    }
+
+    private static func hasHighConfidenceOverlap(_ old: CatalogService, _ incoming: CatalogService) -> Bool {
+        let oldDomains = Set(old.domains.map { $0.lowercased() })
+        let incomingDomains = Set(incoming.domains.map { $0.lowercased() })
+        return !oldDomains.intersection(incomingDomains).isEmpty || !Set(old.asn).intersection(incoming.asn).isEmpty
+    }
+
+    private static func migratedSelection(selected: Set<String>, incomingIDs: Set<String>, resolution: LegacyResolution, selectAllByDefault: Bool) -> Set<String> {
+        var result = Set(resolution.mappings.compactMap { selected.contains($0.key) ? $0.value : nil })
+        result.formUnion(resolution.unmatched.map(\.id).filter(selected.contains))
+        if selectAllByDefault { result.formUnion(incomingIDs.subtracting(Set(resolution.mappings.values))) }
+        return result
     }
 }
 

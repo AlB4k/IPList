@@ -133,6 +133,23 @@ struct MatchedCatalog: Codable, Hashable, Sendable {
     }
 }
 
+/// A user-visible explanation for a state migration decision.  Keeping this
+/// separate from enrichment diagnostics makes it clear that no network source
+/// failed when a legacy selection cannot safely be transferred.
+struct StateMigrationDiagnostic: Codable, Hashable, Sendable, Identifiable {
+    var id: UUID
+    var legacyServiceID: String
+    var candidateServiceIDs: [String]
+    var message: String
+
+    init(id: UUID = UUID(), legacyServiceID: String, candidateServiceIDs: [String], message: String) {
+        self.id = id
+        self.legacyServiceID = legacyServiceID
+        self.candidateServiceIDs = candidateServiceIDs.sorted()
+        self.message = message
+    }
+}
+
 /// Metadata for one service from the licensed catalog.
 struct CatalogService: Codable, Identifiable, Hashable, Sendable {
     static let defaultSource = "pincetgore/amnezia-app-ru-list"
