@@ -20,10 +20,19 @@ func addresses(in routes: [String]) -> Set<UInt32> {
     }
     return result
 }
+func allowedIPv4Routes(in config: String) -> [IPv4Network] {
+    config.split(whereSeparator: \.isNewline).flatMap { line -> [IPv4Network] in
+        guard let equals = line.firstIndex(of: "="),
+              line[..<equals].trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("AllowedIPs") == .orderedSame else {
+            return []
+        }
+        return line[line.index(after: equals)...].split(separator: ",").compactMap { IPv4Network(String($0)) }
+    }
+}
 @main struct CoreTests {
     static func main() async throws {
         let tests = CoreTests()
-        tests.testIPv4AndCIDR(); tests.testIPv4NetworkSetOperations(); tests.testIPv4NetworkReferenceOracle(); tests.testAllowedIPsFormattingDeduplicatesExistingCoverage(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testCatalogDefaults(); tests.testManualGroups(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
+        tests.testIPv4AndCIDR(); tests.testIPv4NetworkSetOperations(); tests.testIPv4NetworkReferenceOracle(); tests.testAllowedIPsFormattingDeduplicatesExistingCoverage(); try tests.testAmneziaWGParsePreservesUnchangedBytes(); try tests.testAmneziaWGOperationsNormalizeRoutes(); try tests.testAmneziaWGRejectsUnsafeConfigurationsWithoutLeakingKeys(); try tests.testAmneziaWGLargeRouteRegression(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testCatalogDefaults(); tests.testManualGroups(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
         print("All checks passed")
     }
     func testIPv4AndCIDR() {
@@ -80,6 +89,99 @@ func addresses(in routes: [String]) -> Set<UInt32> {
             allowedIPsLine(["1.1.1.1", "1.1.1.1/32", "192.0.2.1/24", "192.0.2.9/32"]),
             "AllowedIPs = 1.1.1.1/32, 192.0.2.0/24"
         )
+    }
+    func testAmneziaWGParsePreservesUnchangedBytes() throws {
+        let config = "\u{FEFF}# retained header = exact\r\n[Interface]\r\nPrivateKey = PRIVATE-SECRET-DO-NOT-LOG\r\nJc = 4\r\nHeaderProtectionKey = unchanged\r\n\r\n[Peer]\r\nPublicKey = FIRST-PEER\r\nAllowedIPs = 10.0.0.0/8\r\n\r\n[Peer]\r\n# selected peer\r\nPublicKey = SECOND-PEER\r\nPresharedKey = PRESHARED-SECRET-DO-NOT-LOG\r\nAllowedIPs = 10.0.0.0/8\r\nAllowedIPs = 192.0.2.1/32\r\nEndpoint = vpn.example.test:51820\r\n"
+        let document = try AmneziaWGDocument.parse(config)
+        XCTAssertEqual(document.peers.count, 2)
+        XCTAssertEqual(document.peers.map(\.displayName), ["Peer 1", "vpn.example.test:51820"])
+
+        let edited = try document.render(peer: 1, operation: .add,
+                                         routes: ["192.0.2.1/32", "192.0.2.0/24"],
+                                         preserveIPv6: true)
+        XCTAssertTrue(edited.contains("AllowedIPs = 10.0.0.0/8, 192.0.2.0/24\r\n"))
+        XCTAssertTrue(edited.contains("HeaderProtectionKey = unchanged\r\n"))
+        XCTAssertTrue(edited.hasPrefix("\u{FEFF}# retained header = exact\r\n"))
+        XCTAssertTrue(edited.hasSuffix("Endpoint = vpn.example.test:51820\r\n"))
+        XCTAssertTrue(edited.contains("PresharedKey = PRESHARED-SECRET-DO-NOT-LOG\r\n"))
+        XCTAssertEqual(edited, "\u{FEFF}# retained header = exact\r\n[Interface]\r\nPrivateKey = PRIVATE-SECRET-DO-NOT-LOG\r\nJc = 4\r\nHeaderProtectionKey = unchanged\r\n\r\n[Peer]\r\nPublicKey = FIRST-PEER\r\nAllowedIPs = 10.0.0.0/8\r\n\r\n[Peer]\r\n# selected peer\r\nPublicKey = SECOND-PEER\r\nPresharedKey = PRESHARED-SECRET-DO-NOT-LOG\r\nAllowedIPs = 10.0.0.0/8, 192.0.2.0/24\r\nEndpoint = vpn.example.test:51820\r\n")
+    }
+    func testAmneziaWGOperationsNormalizeRoutes() throws {
+        let config = "[Interface]\nPrivateKey = interface-key\n\n[Peer]\nPublicKey = peer-key\nAllowedIPs = 0.0.0.0/0, 2001:db8::/32\n"
+        let document = try AmneziaWGDocument.parse(config)
+
+        let added = try document.render(peer: 0, operation: .add,
+                                        routes: ["10.0.0.0/8", "10.1.2.3", "10.1.2.3/32"], preserveIPv6: true)
+        XCTAssertTrue(added.contains("AllowedIPs = 0.0.0.0/0, 2001:db8::/32\n"))
+
+        let replaced = try document.render(peer: 0, operation: .replace,
+                                           routes: ["192.0.2.1", "2001:db8:1::/48"], preserveIPv6: true)
+        XCTAssertTrue(replaced.contains("AllowedIPs = 192.0.2.1/32, 2001:db8::/32, 2001:db8:1::/48\n"))
+
+        let bypassed = try document.render(peer: 0, operation: .bypass,
+                                           routes: ["10.0.0.0/8"], preserveIPv6: true)
+        XCTAssertTrue(!bypassed.contains("AllowedIPs = 0.0.0.0/0"))
+        XCTAssertTrue(bypassed.contains("2001:db8::/32"))
+        XCTAssertTrue(!allowedIPv4Routes(in: bypassed).contains { $0.contains(IPv4Network("10.1.2.3")!) })
+
+        let first = try AmneziaWGDocument.parse(config).render(peer: 0, operation: .replace,
+                                                                routes: ["192.0.2.0/24"], preserveIPv6: false)
+        let second = try AmneziaWGDocument.parse(config.replacingOccurrences(of: "peer-key", with: "other-peer-key"))
+            .render(peer: 0, operation: .replace, routes: ["198.51.100.0/24"], preserveIPv6: false)
+        XCTAssertEqual([first, second].count, 2)
+        XCTAssertTrue(first.contains("192.0.2.0/24"))
+        XCTAssertTrue(second.contains("198.51.100.0/24"))
+    }
+    func testAmneziaWGRejectsUnsafeConfigurationsWithoutLeakingKeys() throws {
+        let privateSecret = "PRIVATE-SECRET-DO-NOT-LOG"
+        let presharedSecret = "PRESHARED-SECRET-DO-NOT-LOG"
+        let invalidDocuments = [
+            "[Peer]\nPublicKey = peer\nPresharedKey = \(presharedSecret)\n",
+            "[Interface]\nPrivateKey = \(privateSecret)\n\n[Peer]\nAllowedIPs = 192.0.2.0/24\n",
+            "[Interface]\nPrivateKey = \(privateSecret)\n\n[Peer]\nPublicKey = peer\nAllowedIPs = 999.0.2.0/24\n",
+            "[Interface]\nPrivateKey = \(privateSecret)\n\n[Peer]\nPublicKey = peer\nAllowedIPs = 2001:db8::/129\n",
+            "[Interface]\nPrivateKey = \(privateSecret)\nPrivateKey = duplicate\n\n[Peer]\nPublicKey = peer\n"
+        ]
+        for config in invalidDocuments {
+            XCTAssertThrows(try AmneziaWGDocument.parse(config)) { error in
+                let message = error.localizedDescription
+                return !message.contains(privateSecret) && !message.contains(presharedSecret)
+            }
+        }
+
+        let overlap = "[Interface]\nPrivateKey = \(privateSecret)\n\n[Peer]\nPublicKey = first\nAllowedIPs = 10.0.0.0/24\n\n[Peer]\nPublicKey = second\nAllowedIPs = 192.0.2.0/24\n"
+        let document = try AmneziaWGDocument.parse(overlap)
+        XCTAssertThrows(try document.render(peer: 0, operation: .add, routes: ["192.0.2.0/24"], preserveIPv6: true)) { error in
+            !error.localizedDescription.contains(privateSecret) && !error.localizedDescription.contains(presharedSecret)
+        }
+
+        let withoutAllowedIPs = try AmneziaWGDocument.parse("[Interface]\nPrivateKey = \(privateSecret)\n\n[Peer]\nPublicKey = peer")
+            .render(peer: 0, operation: .add, routes: ["192.0.2.1"], preserveIPv6: true)
+        XCTAssertEqual(withoutAllowedIPs, "[Interface]\nPrivateKey = \(privateSecret)\n\n[Peer]\nPublicKey = peer\nAllowedIPs = 192.0.2.1/32")
+    }
+    func testAmneziaWGLargeRouteRegression() throws {
+        var existing = ["203.0.113.0/24"]
+        for index in 0..<1_535 {
+            let value = index * 2
+            existing.append("198.\((value >> 16) & 255).\((value >> 8) & 255).\(value & 255)/32")
+        }
+        XCTAssertEqual(existing.count, 1_536)
+        let allowedLines = stride(from: 0, to: existing.count, by: 256).map { start in
+            "AllowedIPs = \(existing[start..<min(start + 256, existing.count)].joined(separator: ", "))\n"
+        }.joined()
+        let config = "# header stays byte-for-byte\n[Interface]\nPrivateKey = private\nHeaderProtectionKey = unchanged\n\n[Peer]\nPublicKey = peer\n\(allowedLines)Endpoint = vpn.example.test:51820\n"
+        let document = try AmneziaWGDocument.parse(config)
+        let edited = try document.render(peer: 0, operation: .add,
+                                         routes: ["198.0.0.0", "198.0.0.0/32", "203.0.113.7/32", "198.0.0.1/32", "198.0.12.1/32"],
+                                         preserveIPv6: true)
+        let finalRoutes = allowedIPv4Routes(in: edited)
+        XCTAssertTrue(finalRoutes.contains(IPv4Network("203.0.113.0/24")!))
+        XCTAssertTrue(!finalRoutes.contains(IPv4Network("203.0.113.7/32")!))
+        XCTAssertTrue(finalRoutes.contains { $0.contains(IPv4Network("198.0.12.1/32")!) })
+        XCTAssertEqual(addresses(in: finalRoutes.map(\.description)).subtracting(addresses(in: existing)),
+                       Set([IPv4Network("198.0.0.1/32")!.network, IPv4Network("198.0.12.1/32")!.network]))
+        XCTAssertTrue(edited.contains("# header stays byte-for-byte\n[Interface]\nPrivateKey = private\nHeaderProtectionKey = unchanged\n"))
+        XCTAssertTrue(edited.hasSuffix("Endpoint = vpn.example.test:51820\n"))
     }
     func testImportAndExport() throws {
         let data = Data("[{\"hostname\":\"example.com\",\"ip\":\"1.2.3.4\",\"ips\":[\"1.2.3.5\"]},{\"hostname\":\"192.0.2.123/24\",\"ip\":\"\",\"ips\":[]}]".utf8)
