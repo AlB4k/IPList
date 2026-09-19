@@ -8,7 +8,7 @@ private func check(_ value: @autoclosure () -> Bool, _ message: String) {
 struct StateChecks {
     static func main() throws {
         try testLegacyStateSurvivesAtomicCatalogMigration()
-        testCatalogSelectionControlsEveryExportMode()
+        try testCatalogSelectionControlsEveryExportMode()
         print("State checks passed")
     }
 
@@ -28,16 +28,28 @@ struct StateChecks {
           "manualGroups": [{"id":"00000000-0000-0000-0000-000000000001","name":"VPS"}],
           "changes": [{"id":"00000000-0000-0000-0000-000000000002","date":0,"added":["192.0.2.10"],"removed":[],"reason":"old history"}],
           "lastCheck": 100,
+          "lastChecks": ["lite", 200],
           "intervalHours": 12,
           "automatic": true,
+          "sourceURL": "https://example.test/targeted",
+          "categoryBaseURL": "https://example.test/categories/",
+          "liteSourceURL": "https://example.test/lite",
+          "fullSourceURL": "https://example.test/full",
+          "mode": "full",
+          "dockIconVisible": false,
+          "menuBarIconVisible": true,
+          "hasUnseenChanges": true,
           "profiles": [{"id":"00000000-0000-0000-0000-000000000003","name":"Phone","selected":["renamed"],"mode":"lite","manualEnabled":false,"selectAllByDefault":false}]
         }
         """#
         var state = try JSONDecoder().decode(AppState.self, from: Data(legacyJSON.utf8))
+        check(state.stateVersion == 13 && state.catalog == nil, "legacy state remains in its 1.3 representation before a validated transaction")
         let original = state
         let invalid = matchedCatalog(services: [CatalogService(id: "duplicate", name: "one"), CatalogService(id: "duplicate", name: "two")])
         check(!state.applyMatchedCatalog(invalid), "invalid candidate must be rejected")
-        check(state.services == original.services && state.manual == original.manual && state.profiles == original.profiles,
+        check(state.services == original.services && state.manual == original.manual && state.profiles == original.profiles
+                && state.liteAddresses == original.liteAddresses && state.fullAddresses == original.fullAddresses
+                && state.mode == original.mode && state.sourceURL == original.sourceURL && state.lastChecks == original.lastChecks,
               "failed migration must leave state untouched")
 
         let incoming = [
@@ -48,7 +60,7 @@ struct StateChecks {
             CatalogService(id: "brand-new", name: "Brand new", domains: ["new.example"], targetedAddresses: ["198.51.100.3"])
         ]
         check(state.applyMatchedCatalog(matchedCatalog(services: incoming)), "valid catalog applies")
-        check(state.catalog != nil, "catalog is persisted after migration")
+        check(state.stateVersion == 14 && state.catalog != nil, "catalog is persisted after migration")
         check(state.selectedCatalogIDs.contains("stable"), "stable identifier keeps selection")
         check(state.selectedCatalogIDs.contains("new-name"), "unique high-confidence overlap keeps selection")
         check(!state.selectedCatalogIDs.contains("ambiguous-a") && !state.selectedCatalogIDs.contains("ambiguous-b"),
@@ -61,13 +73,22 @@ struct StateChecks {
         check(state.manual.map(\.address) == ["203.0.113.7"] && state.manual.first?.note == "keep me", "manual entries survive")
         check(state.manualGroups.map(\.name) == ["VPS"], "manual groups survive")
         check(state.changes.first?.reason == "old history" && state.lastCheck == Date(timeIntervalSinceReferenceDate: 100), "history survives")
+        check(state.lastCheck(for: .lite) == Date(timeIntervalSinceReferenceDate: 200), "per-mode history survives")
         check(state.intervalHours == 12 && state.automatic, "schedule survives")
+        check(state.sourceURL == "https://example.test/targeted" && state.categoryBaseURL == "https://example.test/categories/"
+                && state.liteSourceURL == "https://example.test/lite" && state.fullSourceURL == "https://example.test/full",
+              "source settings survive")
+        check(state.mode == .full && !state.dockIconVisible && state.menuBarIconVisible && state.hasUnseenChanges,
+              "existing app preferences survive")
         check(state.profiles.count == 1 && state.profiles[0].selectedCatalogIDs.contains("new-name"), "profile selection migrates")
+        check(state.profiles[0].mode == .lite && !state.profiles[0].manualEnabled && !state.profiles[0].selectAllByDefault,
+              "profile mode and policies survive")
+        check(state.profiles[0].selectedUnassignedModes == Set(CatalogRouteMode.allCases), "legacy profile defaults select source remainders")
     }
 
     // This catches exports that accidentally fall back to the old whole-source
     // Lite/Full sets, lose a shared fragment, or treat the remainder as implicit.
-    static func testCatalogSelectionControlsEveryExportMode() {
+    static func testCatalogSelectionControlsEveryExportMode() throws {
         let alpha = CatalogService(id: "alpha", name: "Alpha", category: "A", targetedAddresses: ["192.0.2.1"], liteAddresses: ["198.51.100.0/31"], fullAddresses: ["203.0.113.0/31"])
         let beta = CatalogService(id: "beta", name: "Beta", category: "A", targetedAddresses: ["192.0.2.2"], liteAddresses: ["198.51.100.0/31"], fullAddresses: ["203.0.113.2/31"])
         let gamma = CatalogService(id: "gamma", name: "Gamma", category: "B", targetedAddresses: ["192.0.2.3"], liteAddresses: ["198.51.100.2/31"], fullAddresses: ["203.0.113.4/31"])
@@ -102,6 +123,8 @@ struct StateChecks {
         check(!state.exportRoutes(for: .full).contains("203.0.113.6/31"), "unassigned route has its own selection")
         state.manualEnabled = false
         check(!state.exportRoutes(for: .targeted).contains("203.0.113.250"), "manual setting still controls My IP")
+        let rows = try JSONDecoder().decode([AmneziaEntry].self, from: exportData(state.exportRoutes(for: .lite)))
+        check(rows.allSatisfy { $0.ip == "" && $0.ips == [] }, "catalog exports retain AmneziaVPN JSON shape")
     }
 
     private static func matchedCatalog(services: [CatalogService]) -> MatchedCatalog {
