@@ -523,8 +523,8 @@ struct ServiceEnricher: Sendable {
                 serviceID: service.id,
                 dnsAddresses: dnsResult.values,
                 asnPrefixes: asnResult.values,
-                dnsDomains: canonicalDomains(service.domains),
-                asnNumbers: canonicalASNs(service.asn),
+                dnsDomains: dnsResult.usesPreviousInputIdentity ? (base?[service.id]?.dnsDomains ?? []) : canonicalDomains(service.domains),
+                asnNumbers: asnResult.usesPreviousInputIdentity ? (base?[service.id]?.asnNumbers ?? []) : canonicalASNs(service.asn),
                 dnsUpdatedAt: dnsResult.updatedAt,
                 asnUpdatedAt: asnResult.updatedAt,
                 freshness: combinedFreshness(dns: dnsResult.freshness, asn: asnResult.freshness)
@@ -565,17 +565,20 @@ struct ServiceEnricher: Sendable {
         }
         if hadFailure, let previous, !previous.isEmpty {
             return SourceRefresh(values: previous, updatedAt: previousUpdatedAt, freshness: .stale,
-                                 diagnostics: [diagnostic(serviceID, source, .stale, "Источник недоступен; использован кэш", previousUpdatedAt)])
+                                 diagnostics: [diagnostic(serviceID, source, .stale, "Источник недоступен; использован кэш", previousUpdatedAt)],
+                                 usesPreviousInputIdentity: true)
         }
         let normalized = collapseIPv4(successful)
         if normalized.isEmpty, let previous, !previous.isEmpty {
             return SourceRefresh(values: previous, updatedAt: previousUpdatedAt, freshness: .stale,
-                                 diagnostics: [diagnostic(serviceID, source, .stale, "Пустой ответ не заменил последний успешный результат", previousUpdatedAt)])
+                                 diagnostics: [diagnostic(serviceID, source, .stale, "Пустой ответ не заменил последний успешный результат", previousUpdatedAt)],
+                                 usesPreviousInputIdentity: true)
         }
         let freshness: EnrichmentFreshness = hadFailure ? .stale : .fresh
         let message = hadFailure ? "Источник недоступен; подтверждённых данных нет" : "Источник обновлён"
         return SourceRefresh(values: normalized, updatedAt: hadFailure ? previousUpdatedAt : now, freshness: freshness,
-                             diagnostics: [diagnostic(serviceID, source, freshness, message, hadFailure ? previousUpdatedAt : now)])
+                             diagnostics: [diagnostic(serviceID, source, freshness, message, hadFailure ? previousUpdatedAt : now)],
+                             usesPreviousInputIdentity: false)
     }
 
     private func retired(
@@ -589,13 +592,15 @@ struct ServiceEnricher: Sendable {
         let diagnostics = hadEvidence
             ? [diagnostic(serviceID, source, .fresh, "Источник удалён из каталога; сохранённые данные удалены", now)]
             : []
-        return SourceRefresh(values: [], updatedAt: now, freshness: .fresh, diagnostics: diagnostics)
+        return SourceRefresh(values: [], updatedAt: now, freshness: .fresh, diagnostics: diagnostics,
+                             usesPreviousInputIdentity: false)
     }
 
     private func cachedResult(_ serviceID: String, _ source: EnrichmentSource, _ values: [String], updatedAt: Date?, freshness: EnrichmentFreshness) -> SourceRefresh {
         let state: EnrichmentFreshness = freshness == .bundled ? .bundled : .cached
         return SourceRefresh(values: values, updatedAt: updatedAt, freshness: state,
-                             diagnostics: [diagnostic(serviceID, source, state, "Использован действующий кэш", updatedAt)])
+                             diagnostics: [diagnostic(serviceID, source, state, "Использован действующий кэш", updatedAt)],
+                             usesPreviousInputIdentity: true)
     }
 
     private func boundedMap<Input: Sendable, Output: Sendable>(
@@ -687,6 +692,9 @@ struct ServiceEnricher: Sendable {
         var updatedAt: Date?
         var freshness: EnrichmentFreshness
         var diagnostics: [EnrichmentDiagnostic]
+        /// True only when the returned values are the prior known-good set;
+        /// its prior input identity must remain pending for a later retry.
+        var usesPreviousInputIdentity: Bool
     }
 
     private struct DNSWork: Sendable {
@@ -796,6 +804,10 @@ struct CatalogMatcher: Sendable {
             from: sourceNetworks,
             representationCount: &representationCount
         )
+        // The exported targeted set includes both new service additions and
+        // the unmatched legacy source complement. Validate their normalized
+        // union so a default/private range cannot be assembled across buckets.
+        _ = try validatedNetworks(owned.values.flatMap { $0 } + remaining)
         let reconstructed = collapseIPv4(assignedInsideSource + remaining)
         guard ipv4SetsEqual(reconstructed, sourceNetworks) else {
             throw EnrichmentError.fragmentLimitExceeded(options.maximumFragments)

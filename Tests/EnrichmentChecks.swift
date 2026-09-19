@@ -309,6 +309,15 @@ struct EnrichmentChecks {
         } catch let error as EnrichmentError {
             check(error == .forbiddenSourceRoute("10.0.0.0/24"), "targeted additions respect configured forbidden routes")
         }
+        do {
+            _ = try CatalogMatcher().match(
+                catalog: catalog(["128.0.0.0/1"]),
+                targeted: [TargetedRoute(address: "0.0.0.0/1")], lite: [], full: [], cached: nil
+            )
+            check(false, "legacy targeted remainder plus an addition cannot form a default route")
+        } catch let error as EnrichmentError {
+            check(error == .rejectedDefaultRoute, "complete targeted output is semantically validated")
+        }
     }
 
     // CIDR normalization must apply before the default-route safety guard.
@@ -458,6 +467,18 @@ struct EnrichmentChecks {
         let asnRequests = await asn.recordedRequests()
         check(Set(dnsRequests) == Set(updated.domains), "all domains including the addition are retried")
         check(Set(asnRequests) == Set(updated.asn), "all ASNs including the addition are retried")
+        check(result.snapshot[old.id]?.dnsDomains == old.domains, "failed DNS addition keeps successful-evidence identity")
+        check(result.snapshot[old.id]?.asnNumbers == old.asn, "failed ASN addition keeps successful-evidence identity")
+
+        let retried = try await ServiceEnricher(dns: dns, asn: asn, limits: EnrichmentLimits(cacheTTL: 3_600))
+            .enrich(catalog: ServiceCatalog(services: [updated]), cached: result.snapshot, now: now.addingTimeInterval(1))
+        check(retried.snapshot[old.id]?.dnsAddresses == ["192.0.2.1"], "second DNS refresh retains the unchanged fallback")
+        check(retried.snapshot[old.id]?.asnPrefixes == ["192.0.2.0/24"], "second ASN refresh retains the unchanged fallback")
+        check(retried.snapshot[old.id]?.freshness == .stale, "failed additions remain stale until resolved")
+        let retriedDNSRequests = await dns.recordedRequests()
+        let retriedASNRequests = await asn.recordedRequests()
+        check(retriedDNSRequests.count == 4, "failed DNS addition retries on the next refresh")
+        check(retriedASNRequests.count == 4, "failed ASN addition retries on the next refresh")
     }
 
     // This catches a clean-install path that ignores the shipped evidence and
