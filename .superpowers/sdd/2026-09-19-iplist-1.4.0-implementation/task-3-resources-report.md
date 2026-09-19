@@ -29,6 +29,5 @@ Both files were byte-compared with the exact files extracted from the upstream c
 
 - Resource byte comparison: passed for both files.
 - Resource bundle-copy check: passed; both files copied into a temporary `IPList.app/Contents/Resources/ThirdParty/` directory and compared byte-for-byte.
-- `git diff --check`: passed for the tracked edits.
+- `git diff --check`: clean for `THIRD_PARTY_NOTICES.md`, `scripts/build-app.sh`, and this report; the exact upstream YAML retains two source indentation-only whitespace lines, which `git diff --check` reports and which were preserved for byte identity.
 - `swift build -c release`: currently blocked by an unrelated compile error in the shared worktree’s `Sources/IPList/AddressMatcher.swift` (`static member 'append' cannot be used on instance of type 'IPv4Network'`, lines 74 and 77). No Swift or test files were changed for this resource task.
-
