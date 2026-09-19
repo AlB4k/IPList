@@ -10,6 +10,7 @@ struct CatalogChecks {
         try testAeroflotFixture()
         try testValidationAndUnknownFields()
         try await testCollisionAndShrinkGuard()
+        try testLegacyCodableDefaults()
         try await testFallbackMetadata()
         try await testNoFallbackFails()
         print("Catalog checks passed")
@@ -85,6 +86,16 @@ struct CatalogChecks {
         } catch let error as ServiceCatalogError {
             if case .suspiciousShrink = error {} else { preconditionFailure("wrong shrink error: \(error)") }
         }
+    }
+
+    static func testLegacyCodableDefaults() throws {
+        let legacyService = Data("{\"id\":\"legacy\",\"name\":\"Legacy\",\"category\":\"Без категории\",\"domains\":[\"legacy.example\"],\"asn\":[],\"ipRanges\":[]}".utf8)
+        let service = try JSONDecoder().decode(CatalogService.self, from: legacyService)
+        check(service.targetedAddresses.isEmpty && service.liteAddresses.isEmpty && service.fullAddresses.isEmpty, "legacy service defaults")
+
+        let legacyCatalog = Data("{\"services\":[\(String(decoding: legacyService, as: UTF8.self))]}".utf8)
+        let catalog = try JSONDecoder().decode(ServiceCatalog.self, from: legacyCatalog)
+        check(catalog.freshness == .cached, "legacy catalog defaults to cached")
     }
 
     static func testFallbackMetadata() async throws {

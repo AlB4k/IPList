@@ -57,6 +57,45 @@ struct CatalogService: Codable, Identifiable, Hashable, Sendable {
         self.fullAddresses = fullAddresses
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case id, name, category, domains, asn, asns, ipRanges, ip_ranges
+        case targetedAddresses, liteAddresses, fullAddresses
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedName = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        let decodedID = try container.decodeIfPresent(String.self, forKey: .id)
+        let decodedASN = try container.decodeIfPresent([Int].self, forKey: .asn)
+            ?? (try container.decodeIfPresent([Int].self, forKey: .asns)) ?? []
+        let decodedRanges = try container.decodeIfPresent([String].self, forKey: .ipRanges)
+            ?? (try container.decodeIfPresent([String].self, forKey: .ip_ranges)) ?? []
+        self.init(
+            id: decodedID,
+            name: decodedName,
+            category: try container.decodeIfPresent(String.self, forKey: .category) ?? "Без категории",
+            domains: try container.decodeIfPresent([String].self, forKey: .domains) ?? [],
+            asn: decodedASN,
+            ipRanges: decodedRanges,
+            targetedAddresses: try container.decodeIfPresent([String].self, forKey: .targetedAddresses) ?? [],
+            liteAddresses: try container.decodeIfPresent([String].self, forKey: .liteAddresses) ?? [],
+            fullAddresses: try container.decodeIfPresent([String].self, forKey: .fullAddresses) ?? []
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(category, forKey: .category)
+        try container.encode(domains, forKey: .domains)
+        try container.encode(asn, forKey: .asn)
+        try container.encode(ipRanges, forKey: .ipRanges)
+        try container.encode(targetedAddresses, forKey: .targetedAddresses)
+        try container.encode(liteAddresses, forKey: .liteAddresses)
+        try container.encode(fullAddresses, forKey: .fullAddresses)
+    }
+
     static func stableID(source: String = Self.defaultSource, name: String) -> String {
         let sourcePart = source
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -107,6 +146,18 @@ struct ServiceCatalog: Codable, Hashable, Sendable {
         self.freshness = freshness
         self.sourceURL = sourceURL
         self.loadedAt = loadedAt
+    }
+
+    private enum CodingKeys: String, CodingKey { case services, freshness, sourceURL, loadedAt }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            services: try container.decodeIfPresent([CatalogService].self, forKey: .services) ?? [],
+            freshness: try container.decodeIfPresent(CatalogFreshness.self, forKey: .freshness) ?? .cached,
+            sourceURL: try container.decodeIfPresent(String.self, forKey: .sourceURL),
+            loadedAt: try container.decodeIfPresent(Date.self, forKey: .loadedAt)
+        )
     }
 
     subscript(name name: String) -> CatalogService? {
