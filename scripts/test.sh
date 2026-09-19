@@ -42,3 +42,7 @@ if [[ -f Tests/EnrichmentChecks.swift ]]; then
     -o .build/checks/enrichment-checks
   .build/checks/enrichment-checks
 fi
+
+if [[ -f Tests/Task7Checks.swift ]]; then
+  ./scripts/test-task7.sh
+fi
