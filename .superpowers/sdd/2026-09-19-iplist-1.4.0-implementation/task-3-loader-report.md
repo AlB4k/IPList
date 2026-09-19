@@ -1,6 +1,6 @@
 # Task 3 loader implementation report
 
-Implementation commit: `4eba7852fcd046f3c468c4f50141f1514631c4a4` (`feat: load licensed service metadata catalog`).
+Implementation commits: `4eba7852fcd046f3c468c4f50141f1514631c4a4` (`feat: load licensed service metadata catalog`) and `26ad6a0a0888e1f02b3b635b3fd38b9621f791b9` (`fix: preserve legacy catalog decoding`).
 
 ## Interfaces
 
@@ -25,7 +25,7 @@ The loader enforces an absolute minimum of one service by default (configurable)
 - `swift build` — passed; existing linker search-path warnings remain from the local toolchain setup.
 - `git diff --check` — passed for the implementation commit.
 
-The isolated `Tests/CatalogChecks.swift` covers Aeroflot parsing and category normalization, unknown-field state isolation, invalid ASN/range rejection, stable-ID collisions, relative shrink rejection, remote failure with cached fallback, and remote failure without fallback.
+The isolated `Tests/CatalogChecks.swift` covers Aeroflot parsing and category normalization, unknown-field state isolation, invalid ASN/range rejection, stable-ID collisions, relative shrink rejection, legacy Codable defaults, remote failure with cached fallback, and remote failure without fallback.
 
 ## Gaps and handoff
 
