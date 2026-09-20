@@ -1,95 +1,71 @@
-# Публикация / Publishing Checklist
+# Публикация IPList 1.4.0 / IPList 1.4.0 publishing
 
 *(English version below — [English](#english))*
 
 ## Русский
 
-Чек-лист для публикации репозитория на GitHub.
+Этот список относится к локально подготовленному релизу **1.4.0 (build 7)**. Он не создаёт GitHub Release и не выполняет `git push`.
 
-### Уже сделано
+### Подготовлено
 
-- [x] Выбрана лицензия и добавлен `LICENSE` — Apache License 2.0, правообладатель AlB4k, 2026.
-- [x] Набор иконок приложения (`Resources/AppIcon.icns`, `Resources/AppIcon.iconset/`) и подключение в `Info.plist` через `scripts/build-app.sh`.
-- [x] Ассеты для оформления GitHub-репозитория в `Resources/GitHub/`: social preview (1280×640), favicon (`.ico` + PNG нескольких размеров), лого для README.
-- [x] README переведён и продублирован на русском (основной раздел) и английском.
-- [x] Bundle identifier заменён на `io.github.alb4k.iplist` (обратный DNS от GitHub-аккаунта AlB4k).
-- [x] Скриншоты добавлены в README (`Resources/Screenshots/`), персональные IP-адреса на скриншоте «Мои IP» заменены на тестовые из RFC 5737.
-- [x] Репозиторий опубликован на GitHub: https://github.com/AlB4k/IPList
+- [x] Версия бандла — `1.4.0`, build `7`, bundle ID `io.github.alb4k.iplist`.
+- [x] Локальный `dist/IPList.app` собирается из release-бинарника, получает иконку, лицензированный каталог и снимок обогащения, затем подписывается ad-hoc.
+- [x] Документация описывает каталог, выбор во всех режимах, атомарное обновление, JSON/`AllowedIPs`, операции `.conf`, мобильное предупреждение Full, приватность ключей, резервную копию v1.4 и отказ от `.vpn`.
+- [x] [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) фиксирует provenance и лицензии включённых ресурсов; адресные списки lib4u не включаются.
+- [x] Скриншоты в `Resources/Screenshots/` используют тестовые RFC 5737 адреса для «Мои IP».
 
-### Осталось сделать перед публикацией
+### Выполнить перед внешней публикацией
 
-- [ ] Нотаризация сознательно не делается — решение принято, распространяется как ad-hoc подписанная сборка с предупреждением Gatekeeper (см. README).
-- [ ] Решить, нужна ли нотаризация приложения для распространения за пределами этого Mac — сейчас сборка подписана только ad-hoc (`codesign --sign -`), без Apple Developer ID. На чистой системе Gatekeeper покажет предупреждение при первом запуске (см. README, раздел «Установка из DMG на чистом Mac»).
-- [ ] Добавить скриншоты интерфейса, если репозиторий должен быть понятен со страницы GitHub без сборки приложения.
-- [ ] Пересмотреть `THIRD_PARTY_NOTICES.md`: не добавлять сторонние данные в репозиторий, пока не прояснена лицензия апстрима.
-- [ ] Собрать свежий билд: `./scripts/build-app.sh`.
-- [ ] Прогнать тесты: `./scripts/test.sh`.
-- [ ] По желанию, перед релизом — `IPLIST_LIVE_TEST=1 ./scripts/test.sh`.
+1. Запустить `./scripts/test.sh`, `swift build`, `swift build -c release`, `./scripts/build-app.sh`, `codesign --verify --deep --strict --verbose=2 dist/IPList.app` и `plutil -p dist/IPList.app/Contents/Info.plist`.
+2. При доступной сети запустить `IPLIST_LIVE_TEST=1 ./scripts/test.sh` и записать дату, доступность источников и ограничения текущего набора.
+3. Проверить содержимое `dist/IPList.app/Contents/Resources/ThirdParty/` по SHA-256 против [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+4. Провести GUI-приёмку в изолированном временном состоянии: поиск Аэрофлота, Targeted/Lite/Full, JSON, `AllowedIPs`, одиночный и пакетный `.conf`, ошибка валидации, предупреждение Full и сохранность состояния при неудачном обновлении.
+5. Если установлены `awg`, `wg-quick` или AmneziaWG, проверить только обезличенный, неконнектируемый fixture `.conf`. Не импортировать реальные ключи и не подключать VPN. Недоступность такого клиента или инструмента указывается как блокер совместимости клиента.
+6. Перед созданием релиза решить вопрос Developer ID и нотарификации. Текущая ad-hoc подпись не подходит для бесшовного распространения на чистых Mac.
+7. Только после отдельного решения владельца создать тег, GitHub Release и выполнить push.
 
-### Не коммитить
+### Никогда не коммитить или не прикладывать к релизу
 
-- `dist/` (в том числе собранные `.dmg`)
-- `.build/`
-- `DerivedData/`
-- Файлы из `~/Library/Application Support/IPList/`
-- Скачанные upstream-файлы списков (JSON), пока не прояснены условия их распространения.
-- Личные экспорты AmneziaVPN с приватными вручную добавленными IP-адресами.
+- `dist/`, `.build/`, `DerivedData/`, DMG и другие продукты сборки;
+- `~/Library/Application Support/IPList/`, включая `state.json`, резервные копии и автоматический JSON;
+- личные JSON-экспорты, `.conf`, `.vpn`, ключи, токены, credential/config exports;
+- загруженные или сгенерированные адресные списки lib4u до явного разрешения их лицензии.
 
-### Первые шаги на GitHub
+### Подпись и распространение
 
-```sh
-git add .
-git commit -m "Initial IPList macOS app"
-```
-
-Локальный репозиторий уже использует ветку `main`. Создайте пустой репозиторий на GitHub, добавьте его как `origin` и запушьте только после проверки того, что реально попадает в коммит.
-
-### CI
-
-Workflow GitHub Actions запускается на `macos-latest`, выполняет автономный Swift-тест-харнесс и собирает бандл приложения. По умолчанию живые сетевые тесты не запускаются, поэтому CI должен быть стабилен даже при медленных upstream-источниках.
+`scripts/build-app.sh` выполняет `codesign --sign -`. Это локальная ad-hoc подпись; нотаризация не выполняется. Пользователь другого Mac увидит Gatekeeper и должен явно разрешить первый запуск. Для публичного распространения нужна подпись Apple Developer ID и нотарификация.
 
 ---
 
 ## English
 
-Checklist for making this repository ready for a public GitHub release.
+This checklist applies to the locally prepared **1.4.0 (build 7)** release. It does not create a GitHub Release or push commits.
 
-### Already done
+### Prepared
 
-- [x] License chosen and `LICENSE` added — Apache License 2.0, copyright AlB4k, 2026.
-- [x] Full app icon set (`Resources/AppIcon.icns`, `Resources/AppIcon.iconset/`) wired into `Info.plist` via `scripts/build-app.sh`.
-- [x] GitHub repository assets in `Resources/GitHub/`: social preview (1280×640), favicon (`.ico` plus PNGs at several sizes), README logo.
-- [x] README translated and duplicated in Russian (primary section) and English.
-- [x] Bundle identifier changed to `io.github.alb4k.iplist` (reverse-DNS of the AlB4k GitHub account).
-- [x] Screenshots added to the README (`Resources/Screenshots/`); the personal IP addresses in the "My IP" screenshot were replaced with RFC 5737 test addresses.
-- [x] Repository published on GitHub: https://github.com/AlB4k/IPList
+- [x] Bundle version is `1.4.0`, build `7`, with bundle ID `io.github.alb4k.iplist`.
+- [x] Local `dist/IPList.app` is built from the release binary, receives the icon, licensed catalog, and enrichment snapshot, then is ad-hoc signed.
+- [x] Documentation covers the catalog, all-mode selection, atomic refresh, JSON/`AllowedIPs`, `.conf` operations, Full mobile warning, key privacy, v1.4 backup, and `.vpn` non-support.
+- [x] [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) records provenance and licenses for bundled resources; lib4u address lists are excluded.
+- [x] Screenshots in `Resources/Screenshots/` use RFC 5737 test addresses for “My IP”.
 
-### Still required before public release
+### Required before external publication
 
-- [ ] Notarization was deliberately skipped — the app ships as an ad-hoc signed build with a Gatekeeper warning on first launch (see README).
-- [ ] Review `THIRD_PARTY_NOTICES.md` and keep third-party data out of the repository unless its license allows redistribution.
-- [ ] Create a fresh build with `./scripts/build-app.sh`.
-- [ ] Run `./scripts/test.sh`.
-- [ ] Optionally run `IPLIST_LIVE_TEST=1 ./scripts/test.sh` before a tagged release.
+1. Run `./scripts/test.sh`, `swift build`, `swift build -c release`, `./scripts/build-app.sh`, `codesign --verify --deep --strict --verbose=2 dist/IPList.app`, and `plutil -p dist/IPList.app/Contents/Info.plist`.
+2. With network access, run `IPLIST_LIVE_TEST=1 ./scripts/test.sh` and record the date, source availability, and current-list limitations.
+3. Compare `dist/IPList.app/Contents/Resources/ThirdParty/` SHA-256 values with [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+4. Perform GUI acceptance in isolated temporary state: Aeroflot search, Targeted/Lite/Full, JSON, `AllowedIPs`, one-file and batch `.conf`, validation error, Full warning, and state preservation after a failed refresh.
+5. If `awg`, `wg-quick`, or AmneziaWG is installed, validate only a sanitized, non-connectable fixture `.conf`. Do not import real keys or establish a VPN connection. Missing client tooling is a client-compatibility blocker.
+6. Decide on Developer ID signing and notarization before publishing. The current ad-hoc signature is unsuitable for seamless distribution on clean Macs.
+7. Create a tag, GitHub Release, and push only after a separate owner decision.
 
-### Do Not Commit
+### Never commit or attach to a release
 
-- `dist/` (including any built `.dmg`)
-- `.build/`
-- `DerivedData/`
-- Files from `~/Library/Application Support/IPList/`
-- Downloaded upstream JSON/list files unless their redistribution terms are clarified.
-- Personal AmneziaVPN exports that contain private manual IP entries.
+- `dist/`, `.build/`, `DerivedData/`, DMGs, or other build products;
+- `~/Library/Application Support/IPList/`, including `state.json`, backups, and automatic JSON;
+- personal JSON exports, `.conf`, `.vpn`, keys, tokens, and credential/config exports;
+- downloaded or generated lib4u address lists until their redistribution license is explicitly cleared.
 
-### Suggested First GitHub Steps
+### Signing and distribution
 
-```sh
-git add .
-git commit -m "Initial IPList macOS app"
-```
-
-The local repository already uses the `main` branch. Then create an empty GitHub repository and add it as `origin`. Push only after reviewing the staged files.
-
-### CI
-
-The included GitHub Actions workflow runs on `macos-latest`, executes the standalone Swift test harness, and builds the app bundle. It does not run live network tests by default, so CI should be stable even when upstream list services are slow.
+`scripts/build-app.sh` runs `codesign --sign -`. This is local ad-hoc signing; no notarization is performed. A person using another Mac will see Gatekeeper and must explicitly allow the first launch. Public distribution needs Apple Developer ID signing and notarization.

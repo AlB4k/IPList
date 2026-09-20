@@ -5,7 +5,7 @@
 <h1 align="center">IPList</h1>
 
 <p align="center">
-  <a href="README.md#русский">Русский</a> · <a href="README.md#english">English</a>
+  <a href="#русский">Русский</a> · <a href="#english">English</a>
 </p>
 
 <p align="center">
@@ -18,298 +18,162 @@
 
 ## Русский
 
-**IPList** — нативное приложение для macOS 13+, которое ведёт актуальный список адресов для раздельного туннелирования (split tunneling) в **AmneziaVPN**. Приложение само скачивает публичные Amnezia-совместимые списки, даёт выбрать, какие категории сервисов должны идти в обход VPN, отслеживает изменения между проверками и экспортирует JSON именно в том формате, который понимает AmneziaVPN.
+**IPList 1.4.0** — нативное приложение для macOS 13+, которое собирает и поддерживает список IPv4/CIDR для раздельного туннелирования AmneziaVPN и AmneziaWG. Оно показывает обновляемый каталог российских сервисов, помогает выбрать нужные маршруты и создаёт JSON для AmneziaVPN либо строку `AllowedIPs` и отдельные копии `.conf` для AmneziaWG.
 
-Сделано на основе списков [lib4u/amnezia-tunneling-ru](https://github.com/lib4u/amnezia-tunneling-ru). Поддерживаются все три варианта апстрима:
+### Каталог, источники и выбор
 
-- `amnezia.json` — точечный обход по известным сервисам, с выбором категорий и сервисов прямо в IPList;
-- `amnezia-ip-lite.json` — компактный список подсетей IPv4 для мобильных клиентов и более строгих условий;
-- `amnezia-ip.json` — полный российский IPv4-сегмент для максимального покрытия на десктопе.
+IPList получает адресные источники [lib4u/amnezia-tunneling-ru](https://github.com/lib4u/amnezia-tunneling-ru): `amnezia.json` (Targeted), `amnezia-ip-lite.json` (Lite) и `amnezia-ip.json` (Full). Метаданные каталога берутся из [pincetgore/amnezia-app-ru-list](https://github.com/pincetgore/amnezia-app-ru-list); в приложение включён проверенный снимок как резерв для чистой установки. DNS-записи запрашиваются через системный DNS macOS, ASN-префиксы — у RIPEstat. Подробнее о происхождении и лицензиях — в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-Свои адреса можно добавить в категорию «Мои IP» и по желанию включить в любой режим экспорта — их можно раскладывать по собственным группам (например, «VPS-сервера», «Сайты») и подписывать примечанием.
+Каталог содержит категории, сервисы, домены, ASN, явные диапазоны и найденные адреса для текущего режима. Поиск находит сервис по названию, домену, ASN, IP или пересекающемуся CIDR; например, «Аэрофлот» находится по `Аэрофлот`, `aeroflot.ru`, AS34571 и сопоставленному адресу. Сервисы, которых нет в метаданных, остаются видимы как «Дополнительные ресурсы lib4u», а неприписанные части исходников — как выбранные по умолчанию «Остальные сети источника».
 
-### Скриншоты
+Отметки категорий и сервисов действуют одинаково в Targeted, Lite и Full. Отмеченный сервис добавляет свои маршруты текущего режима; снятая отметка их исключает. Общая часть сети остаётся, пока нужна хотя бы одному другому отмеченному сервису. «Остальные сети источника» имеют отдельную отметку, а «Мои IP» добавляются только при включённой настройке. На чистой установке выбраны все сервисы и остатки, поэтому Lite и Full повторяют полный исходный набор. Именные профили сохраняют этот выбор, режим и настройку «Мои IP».
 
-| Каталог | Мои IP |
-|---|---|
-| ![Каталог](Resources/Screenshots/catalog.png) | ![Мои IP](Resources/Screenshots/my-ip.png) |
+«Проверить сейчас» и расписание получают каталог и все три источника как одну транзакцию. Новая модель публикуется только после проверки полноты: объединение сервисных маршрутов и «Остальных сетей источника» точно равно нормализованному источнику Lite/Full. Если источник, DNS или RIPEstat недоступны, предыдущие подтверждённые данные сохраняются с указанием возраста; неуспешная проверка не меняет последний успешный каталог, выбор или автоматический экспорт. В диагностике показаны результаты Targeted, Lite, Full, каталога, DNS и RIPEstat.
 
-| Изменения | Выгрузка |
-|---|---|
-| ![Изменения](Resources/Screenshots/history.png) | ![Выгрузка](Resources/Screenshots/export.png) |
+### Выгрузка
 
-| Настройки |
-|---|
-| ![Настройки](Resources/Screenshots/settings.png) |
+Обычный JSON остаётся совместимым с импортом AmneziaVPN. В AmneziaVPN выберите режим раздельного туннелирования «адреса из списка НЕ используют VPN», затем импортируйте файл. Повторный импорт зависит от версии клиента: проверьте, заменил ли он старые правила или объединил их.
 
-*IP-адреса на скриншоте «Мои IP» заменены на тестовые из RFC 5737 — на реальном экране там были бы ваши собственные адреса.*
+Вкладка «Выгрузка» также формирует строку вида:
 
-### Возможности
+```ini
+AllowedIPs = 1.1.1.1/32, 192.0.2.0/24
+```
 
-- Ручное обновление и встроенное расписание — от 1 до 720 часов.
-- Страница диагностики источников: HTTP-статус, время ответа, число адресов, точный URL, на котором произошла ошибка.
-- Повтор запроса и переключение на официальный резервный URL между GitHub Releases и `raw.githubusercontent.com`.
-- Дерево категорий (свёрнуто по умолчанию), быстрый выбор всех/ничего, поиск, выбор отдельных сервисов — у каждой категории своя иконка.
-- Именованные профили: сохраняют выбранные сервисы, режим экспорта и флаг «Мои IP».
-- Импорт уже существующего экспорта Amnezia для ручного выбора адресов.
-- Копирование адресов «Мои IP» в буфер обмена — все сразу или по одному.
-- История изменений — какие адреса добавились/пропали между успешными проверками.
-- Автоматический локальный экспорт в `~/Library/Application Support/IPList/amnezia-direct.json`.
-- Присутствие в строке меню, чтобы расписание продолжало работать при закрытом окне.
-- Настраиваемая видимость значка: можно скрыть из Dock, оставив только строку меню, или наоборот. Значок в строке меню сам показывает колокольчик, если после обновления появились или пропали адреса — оба значка одновременно скрыть нельзя, иначе до приложения будет не добраться.
-- Верхняя панель окна показывает текущее расписание обновления одним взглядом.
+Одиночный IPv4 записывается как `/32`; CIDR нормализуются, семантически дедуплицируются и сортируются. `AllowedIPs` направляет перечисленные сети **через VPN к выбранному peer**. Для обычного обхода VPN используйте JSON-исключения AmneziaVPN либо действие «Пустить выбранное мимо VPN» при создании `.conf` ниже.
 
-### Установка и запуск
+«Создать конфигурацию AmneziaWG» читает выбранные `.conf` только для создания новых файлов. Исходники не перезаписываются, ключи не сохраняются в состояние, историю или журналы, а обработка выполняется в памяти. Можно выбрать peer, если их несколько, и одну из операций:
 
-**Готовый DMG:** [скачать IPList-1.3.1.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.3.1.dmg) со страницы [Releases](https://github.com/AlB4k/IPList/releases/latest). DMG содержит `IPList.app`, ярлык на `/Applications` и инструкцию по первому запуску.
+- **Добавить к существующим** — объединяет выбранные маршруты с `AllowedIPs`.
+- **Заменить выбранными** — оставляет выбранные IPv4; существующие IPv6 можно сохранить отдельной настройкой.
+- **Пустить выбранное мимо VPN** — вычитает выбранные IPv4/CIDR из существующих `AllowedIPs`; это действие выбрано по умолчанию.
 
-Автообновления в приложении нет: если уже установлена более ранняя версия, для перехода на новую скачайте свежий DMG и перетащите `IPList.app` в `/Applications` поверх старого — настройки и списки в `~/Library/Application Support/IPList/` сохранятся.
+Перед записью IPList проверяет структуру, CIDR и новые пересечения между peer. Для нескольких входных файлов создаются независимые `-iplist.conf` в выбранной папке; одинаковые имена получают детерминированный суффикс. IPList не перезаписывает входной или существующий выходной файл.
 
-Либо собрать локальный бандл приложения из исходников:
+Full содержит очень большой набор маршрутов. Перед копированием, сохранением или созданием конфигурации в режиме Full приложение выводит блокирующее предупреждение: Android/iOS могут не поднять туннель с таким объёмом. Для телефона обычно выбирайте Lite или отдельные сервисы. Проверка синтаксиса не гарантирует, что другой клиент или устройство установит тысячи маршрутов.
+
+Файлы `.vpn` не поддерживаются: IPList не читает, не изменяет и не экспортирует их. Этот формат содержит профиль и секреты, а встроенное раздельное туннелирование AmneziaVPN хранится отдельно от серверного профиля.
+
+### Хранение, обновление и приватность
+
+Состояние хранится под текущим пользователем macOS:
+
+```text
+~/Library/Application Support/IPList/
+```
+
+- `state.json` — каталог, выбор, профили, ручные адреса, настройки, диагностические данные и кэш;
+- `state-before-v1.4.json` — разовая резервная копия состояния 1.3.x перед первой миграцией 1.4.0;
+- `state-before-v1.1.json` — резервная копия более ранней миграции, если она существовала;
+- `amnezia-direct.json` — текущий автоматически сохранённый JSON-экспорт.
+
+Ручные IP, группы, заметки, профили, расписание и история сохраняются при миграции. Не добавляйте эту папку, личные JSON-экспорты, `.conf`, `.vpn` или ключи в Git.
+
+### Установка и разработка
+
+Соберите локальное приложение:
 
 ```sh
 ./scripts/build-app.sh
 open dist/IPList.app
 ```
 
-Готовое приложение подписано ad-hoc (не через Apple Developer ID) и предназначено для локального использования на этом Mac — оно не нотаризовано для публичного распространения.
+Сборка подписана ad-hoc (`codesign --sign -`) и не нотаризована. На другом Mac Gatekeeper потребует явного подтверждения первого запуска; для публичного распространения требуется Developer ID и нотарификация.
 
-Для повседневного использования перенесите `IPList.app` в `/Applications` и добавьте в «Системные настройки → Основные → Элементы входа», если расписание должно продолжать работать после перезагрузки.
-
-**Установка из DMG на «чистом» Mac.** При первом запуске macOS Gatekeeper покажет предупреждение «не удаётся проверить разработчика» — это ожидаемо для ad-hoc подписи без Developer ID. Правой кнопкой по IPList.app → «Открыть» → подтвердить во всплывающем окне, либо разрешить в «Настройки → Конфиденциальность и безопасность». Делать это нужно только один раз.
-
-### Как пользоваться
-
-1. Откройте IPList и нажмите «Проверить сейчас».
-2. На вкладке «Каталог» выберите режим выгрузки и отметьте нужные категории или отдельные сервисы. По умолчанию выбраны все категории, группы свёрнуты.
-3. На вкладке «Мои IP» добавьте IPv4/CIDR вручную (можно сразу выбрать группу) или импортируйте существующий экспорт Amnezia. Импортированные адреса показываются для выбора и не включаются автоматически. Группами и примечаниями можно управлять и позже — список сгруппирован, группы создаются, переименовываются и удаляются прямо там же (удаление группы не удаляет сами адреса, они становятся «без группы»).
-4. На вкладке «Выгрузка» решите, включать ли «Мои IP» в файл, и сохраните JSON.
-5. В AmneziaVPN откройте раздельное туннелирование по сайтам, выберите режим «адреса из списка НЕ используют VPN» и импортируйте сохранённый JSON.
-
-При повторном импорте в AmneziaVPN проверьте, как клиент обходится с уже загруженными правилами: IPList экспортирует актуальный список целиком, но AmneziaVPN может объединять его со старыми правилами вместо замены — это зависит от версии клиента.
-
-### Режимы экспорта
-
-Точечный режим использует `amnezia.json` и учитывает выбор категорий/сервисов в IPList — лучший вариант, когда VPN должны обходить только конкретные известные сервисы.
-
-Компактный и полный режимы выгружают весь upstream-список диапазонов целиком. Формат источника не гарантирует надёжного соответствия «подсеть → категория сервиса», поэтому выбор категорий сознательно ограничен точечным режимом. Ручные адреса можно включать и в компактный, и в полный режим.
-
-IPv6 не экспортируется. Домены без IPv4-адреса в источнике видны в каталоге, только если у апстрима нет для них IP.
-
-### Хранение данных
-
-Локальное состояние хранится здесь:
-
-```text
-~/Library/Application Support/IPList/
-```
-
-В этой папке:
-
-- `state.json` — загруженный каталог, выбор, профили, ручные адреса, настройки расписания, кэш компактного/полного списков, недавняя история;
-- `state-before-v1.1.json` — разовая резервная копия, создаётся при первом запуске после обновления до версии 1.1;
-- `amnezia-direct.json` — автоматически сохранённый экспорт для текущего режима.
-
-Введённые вручную IP-адреса хранятся только локально и никуда, кроме этой папки на вашем компьютере, не отправляются.
-
-### Источники
-
-URL по умолчанию:
-
-```text
-https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia.json
-https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia-ip-lite.json
-https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia-ip.json
-https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/
-```
-
-Приложение также понимает совместимые кастомные HTTPS-адреса в том же формате JSON.
-
-Названия категорий берутся из файлов `v2fly/domain-list-community`, включая цепочки `include`, записи `full`, `domain` и обычные домены. Правила `regexp` и `keyword` не превращаются в придуманные адреса — такие записи пропускаются.
-
-### Разработка
-
-Нужно:
-
-- macOS 13 или новее для запуска приложения;
-- Swift Command Line Tools или Xcode с поддержкой Swift 5.9;
-- сетевой доступ для проверки живых источников.
-
-Сборка и тесты:
+Проверки разработчика:
 
 ```sh
 ./scripts/test.sh
+swift build
+swift build -c release
 ./scripts/build-app.sh
-```
-
-Дополнительный тест на реальных апстрим-источниках:
-
-```sh
 IPLIST_LIVE_TEST=1 ./scripts/test.sh
 ```
 
-Тестовый набор — самостоятельный исполняемый файл на Swift, без зависимости от XCTest. Он проверяет нормализацию адресов, импорт/экспорт, выбор по умолчанию, миграцию состояния, профили, повтор запросов, резервные URL, искусственные таймауты, обработку невалидного JSON, диагностику и все три режима экспорта.
+Живой тест обращается к текущим источникам и поэтому требует сети. Обычный набор не зависит от сети и проверяет CIDR-операции, обычный JSON, `AllowedIPs`, сохранность `.conf`, выбор во всех режимах, атомарное обновление и миграцию.
 
 ### Лицензия
 
-Apache License 2.0 — см. [LICENSE](LICENSE). Правообладатель: AlB4k, 2026.
-
-### Стороннее ПО и данные
-
-Заметки о сторонних источниках — в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Репозиторий не содержит вендоренных копий upstream-списков Amnezia.
-
-### Безопасность и приватность
-
-IPList скачивает публичные файлы списков по настроенным URL и сохраняет локальные JSON-файлы. Приложение не управляет AmneziaVPN напрямую и не изменяет настройки VPN.
-
-Локальное состояние хранится под текущей учётной записью пользователя macOS. Не коммитьте файлы из `~/Library/Application Support/IPList/` — там могут быть личные вручную добавленные IP-адреса.
+Исходный код IPList распространяется по Apache License 2.0 — [LICENSE](LICENSE). Список сторонних компонентов, снимков и ограничений распространения — [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Источники адресов lib4u не вендорятся и не входят в бинарный релиз.
 
 ---
 
 ## English
 
-**IPList** is a native SwiftUI app for macOS 13+ that keeps an AmneziaVPN split tunneling bypass list up to date. It downloads public Amnezia-compatible lists, lets you choose which service categories should bypass VPN, tracks changes between checks, and exports JSON in the format AmneziaVPN can import.
+**IPList 1.4.0** is a native macOS 13+ app that builds and maintains IPv4/CIDR lists for AmneziaVPN and AmneziaWG split tunneling. It presents an updatable Russian-service catalog, lets you select routes, and creates either AmneziaVPN JSON or an `AllowedIPs` line and separate AmneziaWG `.conf` outputs.
 
-The app was built around [lib4u/amnezia-tunneling-ru](https://github.com/lib4u/amnezia-tunneling-ru). It supports all three current upstream list variants:
+### Catalog, sources, and selection
 
-- `amnezia.json`: targeted bypass for known services, with category and service selection inside IPList.
-- `amnezia-ip-lite.json`: compact IPv4 subnet list intended for mobile clients and stricter environments.
-- `amnezia-ip.json`: full Russian IPv4 segment list for maximum desktop coverage.
+IPList loads [lib4u/amnezia-tunneling-ru](https://github.com/lib4u/amnezia-tunneling-ru) address sources: `amnezia.json` (Targeted), `amnezia-ip-lite.json` (Lite), and `amnezia-ip.json` (Full). The service catalog comes from [pincetgore/amnezia-app-ru-list](https://github.com/pincetgore/amnezia-app-ru-list), with a verified bundled snapshot for a clean-install fallback. DNS uses macOS system DNS and ASN prefixes use RIPEstat. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for provenance and licenses.
 
-Manual addresses can be added in the "My IP" category and optionally included in any export mode — you can organize them into your own groups (e.g. "VPS servers", "Websites") and attach a note to each one.
+The catalog includes categories, services, domains, ASN values, explicit ranges, and matched routes for the current mode. Search accepts service name, domain, ASN, IP, or intersecting CIDR; for example, Aeroflot is found by `Аэрофлот`, `aeroflot.ru`, AS34571, and a matched address. Entries absent from catalog metadata remain visible as “Additional lib4u resources”, while unmatched source fragments appear as the selected-by-default “Other source networks”.
 
-### Screenshots
+Category and service choices have the same meaning in Targeted, Lite, and Full. Selecting a service includes its current-mode routes; clearing it excludes its own routes. A shared fragment stays while another selected service owns it. “Other source networks” have their own choice, and “My IP” entries are included only when enabled. A clean install selects every service and remainder, so Lite and Full reproduce their complete source lists. Named profiles retain the selection, mode, and “My IP” setting.
 
-| Catalog | My IP |
-|---|---|
-| ![Catalog](Resources/Screenshots/catalog.png) | ![My IP](Resources/Screenshots/my-ip.png) |
+“Check now” and the schedule load the catalog and all three sources as one transaction. The candidate is published only after proving that service routes plus “Other source networks” exactly reconstruct the normalized Lite/Full source sets. A catalog, DNS, or RIPEstat failure keeps the previous verified data with an age marker; a failed check leaves the last successful catalog, selection, and automatic export unchanged. Diagnostics show Targeted, Lite, Full, catalog, DNS, and RIPEstat results.
 
-| History | Export |
-|---|---|
-| ![History](Resources/Screenshots/history.png) | ![Export](Resources/Screenshots/export.png) |
+### Export
 
-| Settings |
-|---|
-| ![Settings](Resources/Screenshots/settings.png) |
+The normal JSON export remains compatible with AmneziaVPN import. In AmneziaVPN choose the split-tunneling mode where addresses in the list do **not** use VPN, then import the JSON. Check how the installed client handles repeat imports: versions and workflows may replace or merge old rules.
 
-*The IP addresses in the "My IP" screenshot are replaced with RFC 5737 test addresses — the real screen would show your own entries.*
+The Export page also creates a line such as:
 
-### Features
+```ini
+AllowedIPs = 1.1.1.1/32, 192.0.2.0/24
+```
 
-- Manual update button and in-app schedule from 1 to 720 hours.
-- Source diagnostics page with HTTP status, response time, parsed address count, and exact failing URL.
-- Retry and official fallback handling between GitHub Releases and `raw.githubusercontent.com`.
-- Category tree with collapsed groups by default, global select-all, search, per-service selection, and a distinct icon per category.
-- Named profiles for saving and restoring selected services, export mode, and the "My IP" inclusion flag.
-- Import of an existing Amnezia JSON export for manual address selection.
-- Copy "My IP" addresses to the clipboard — all at once or one at a time.
-- Change history for added and removed addresses between successful checks.
-- Automatic local export to `~/Library/Application Support/IPList/amnezia-direct.json`.
-- Menu bar presence, so scheduled checks can continue while the main window is closed.
-- Configurable icon visibility: hide the Dock icon and keep only the menu bar item, or the other way around. The menu bar icon itself switches to a bell glyph when addresses were added or removed after a refresh. Both icons cannot be hidden at the same time, so there is always a way back into the app.
-- The window's toolbar shows the current update schedule at a glance.
+Individual IPv4 values become `/32`; CIDRs are normalized, semantically deduplicated, and sorted. `AllowedIPs` sends the listed networks **through VPN to the selected peer**. For a regular VPN bypass, use AmneziaVPN JSON exclusions or the “Send selected outside VPN” operation when creating a `.conf` below.
 
-### Install And Run
+“Create AmneziaWG configuration” reads selected `.conf` files only to create new files. Inputs are never overwritten; keys are not stored in application state, history, or logs, and are handled in memory. Choose a peer when there are several and one operation:
 
-**Ready-made DMG:** [download IPList-1.3.1.dmg](https://github.com/AlB4k/IPList/releases/latest/download/IPList-1.3.1.dmg) from the [Releases](https://github.com/AlB4k/IPList/releases/latest) page. The DMG contains `IPList.app`, an `/Applications` shortcut, and a first-launch note.
+- **Add to existing** merges selected routes into `AllowedIPs`.
+- **Replace with selected** writes selected IPv4 routes; an option retains existing IPv6 routes.
+- **Send selected outside VPN** subtracts selected IPv4/CIDRs from existing `AllowedIPs`; this is the default operation.
 
-There is no in-app auto-update: if an earlier version is already installed, download the new DMG and drag `IPList.app` over the old one in `/Applications` — settings and lists under `~/Library/Application Support/IPList/` are preserved.
+Before writing, IPList validates structure, CIDRs, and new peer-to-peer overlaps. Multiple input files produce independent `-iplist.conf` files in the selected folder; duplicate input names receive a deterministic suffix. IPList never overwrites an input or existing output.
 
-Or build a local app bundle from source:
+Full can contain a very large route set. Before copying, saving, or creating a configuration in Full mode, the app presents a blocking warning: Android/iOS may fail to bring up a tunnel with that volume. Lite or selected services are usually better for phones. Syntax validation cannot guarantee that a different client or device will install thousands of routes.
+
+`.vpn` files are out of scope. IPList does not read, modify, or export them: they contain a profile and secrets, while AmneziaVPN’s built-in split-tunneling settings are separate from the server profile.
+
+### Storage, upgrade, and privacy
+
+State lives under the current macOS user:
+
+```text
+~/Library/Application Support/IPList/
+```
+
+- `state.json` — catalog, selection, profiles, manual entries, settings, diagnostics, and cache;
+- `state-before-v1.4.json` — one-time 1.3.x backup before the first 1.4.0 migration;
+- `state-before-v1.1.json` — an earlier migration backup, when present;
+- `amnezia-direct.json` — the current automatically saved JSON export.
+
+Manual IPs, groups, notes, profiles, schedule, and history survive migration. Do not add this directory, personal JSON exports, `.conf`, `.vpn`, or keys to Git.
+
+### Installation and development
+
+Build the local app:
 
 ```sh
 ./scripts/build-app.sh
 open dist/IPList.app
 ```
 
-The produced app is ad-hoc signed and intended for local use on this Mac. It is not notarized for public distribution.
+The bundle is ad-hoc signed (`codesign --sign -`) and not notarized. Gatekeeper requires an explicit first-launch confirmation on another Mac; public distribution requires a Developer ID signature and notarization.
 
-For regular use, move `IPList.app` to `/Applications` and add it to "System Settings -> General -> Login Items" if scheduled checks should resume after reboot.
-
-**Installing a DMG on a clean Mac.** macOS Gatekeeper will warn that the developer cannot be verified on first launch — expected for an ad-hoc signature without a Developer ID. Right-click IPList.app -> "Open" -> confirm in the dialog, or allow it under "System Settings -> Privacy & Security". This is only needed once.
-
-### Using The App
-
-1. Open IPList and click "Check now".
-2. In "Catalog", choose the export mode and select categories or individual services. All categories are selected by default, and groups are collapsed by default.
-3. In "My IP", add IPv4/CIDR entries manually (optionally picking a group right away) or import an existing Amnezia JSON file. Imported entries are shown for selection and are not enabled silently. Groups and notes can be managed later too — the list is grouped, and groups can be created, renamed, and deleted right there (deleting a group never deletes its addresses; they become ungrouped).
-4. In "Export", choose whether manual addresses should be included, then save the JSON file.
-5. In AmneziaVPN, open site split tunneling, choose the mode where addresses from the list should not use VPN, and import the exported JSON.
-
-When re-importing into AmneziaVPN, check how the client handles previous entries. IPList exports the current desired list, but AmneziaVPN may merge with old imported rules instead of replacing them, depending on the client version and workflow.
-
-### Export Modes
-
-The targeted mode uses `amnezia.json` and applies the category/service selection from IPList. It is the best mode when only known services should bypass VPN.
-
-The Lite and Full modes export the upstream IP range files as whole datasets. Their source format does not preserve a reliable one-to-one relationship between subnet and service category, so category selection is intentionally limited to the targeted mode. Manual addresses can still be included in Lite and Full exports.
-
-IPv6 is not exported. Domain-only entries are visible in the catalog only when the upstream source does not provide an IPv4 address for them.
-
-### Data Storage
-
-IPList stores its local state in:
-
-```text
-~/Library/Application Support/IPList/
-```
-
-Files in that directory include:
-
-- `state.json`: downloaded catalog, selections, profiles, manual addresses, schedule settings, cached Lite/Full lists, and recent history.
-- `state-before-v1.1.json`: one-time backup created on first launch after upgrading to version 1.1.
-- `amnezia-direct.json`: automatically saved export for the currently selected mode.
-
-User-provided manual IP addresses are stored only locally. They are not sent to upstream list sources.
-
-### Sources
-
-Default source URLs:
-
-```text
-https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia.json
-https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia-ip-lite.json
-https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia-ip.json
-https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/
-```
-
-The app also understands compatible custom HTTPS URLs in the same JSON shape.
-
-Category names are derived from files in `v2fly/domain-list-community`, including include chains, `full`, `domain`, and plain domain entries. `regexp` and `keyword` rules are not converted into invented addresses.
-
-### Development
-
-Requirements:
-
-- macOS 13 or newer for running the app.
-- Swift Command Line Tools or Xcode with Swift 5.9 support.
-- Network access for live source checks.
-
-Build and test:
+Developer checks:
 
 ```sh
 ./scripts/test.sh
+swift build
+swift build -c release
 ./scripts/build-app.sh
-```
-
-Optional live test against real upstream sources:
-
-```sh
 IPLIST_LIVE_TEST=1 ./scripts/test.sh
 ```
 
-The test harness is a standalone Swift executable and does not require XCTest. It covers address normalization, import/export behavior, default selection, migration, profiles, retry logic, fallback URLs, artificial timeout behavior, invalid JSON handling, diagnostics, and the three export modes.
+The live test contacts current sources and needs network access. The regular suite is offline and covers CIDR operations, normal JSON, `AllowedIPs`, `.conf` preservation, selection in every mode, atomic refresh, and migration.
 
 ### License
 
-Apache License 2.0 — see [LICENSE](LICENSE). Copyright AlB4k, 2026.
-
-### Third-Party Software And Data
-
-Third-party source notes are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The repository does not include vendored copies of upstream Amnezia list files.
-
-### Security And Privacy Notes
-
-IPList downloads public list files from the configured URLs and writes local JSON files. It does not control AmneziaVPN directly and does not modify VPN settings.
-
-The app stores local state under the current macOS user account. Do not commit files from `~/Library/Application Support/IPList/`; they may contain personal manual IP entries.
+IPList source code is Apache License 2.0 — [LICENSE](LICENSE). [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) records third-party components, snapshots, and redistribution constraints. lib4u address-source files are not vendored or included in binary releases.

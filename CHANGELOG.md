@@ -1,0 +1,32 @@
+# Changelog
+
+All notable changes to IPList are documented here.
+
+## 1.4.0 — 2026-09-20
+
+### Added
+
+- Service catalog based on the licensed `pincetgore/amnezia-app-ru-list` metadata snapshot, with categories, domains, ASN values, explicit ranges, freshness information, and searchable services.
+- Per-mode route matching for Targeted, Lite, and Full, including visible selected-by-default source remainders so each Lite/Full source set remains complete.
+- DNS and RIPEstat enrichment with bounded concurrency, deadline, cached last-known-good evidence, diagnostics, and a bundled evidence snapshot for a clean installation.
+- `AllowedIPs` copy and save actions with normalized, semantic IPv4/CIDR deduplication.
+- AmneziaWG `.conf` enrichment with peer selection, add, replace, and bypass operations; original files remain untouched and batch inputs create independent outputs.
+- Full-mode route/size summary and a blocking mobile warning before `AllowedIPs` actions.
+- A one-time `state-before-v1.4.json` backup before the first 1.4 state migration.
+
+### Changed
+
+- Service and category selection now applies consistently to Targeted, Lite, and Full exports; shared route fragments stay selected while another selected service owns them.
+- Source refresh is atomic across the catalog and all three address sources. An incomplete transaction preserves the previous successful catalog, selections, and automatic export.
+- Diagnostics distinguish catalog, Targeted, Lite, Full, DNS, and RIPEstat results.
+
+### Security and compatibility
+
+- Configuration private keys and other `.conf` contents are handled in memory and are not written to IPList state, history, or logs.
+- `.vpn` profiles are not read, modified, or exported.
+- The local app remains ad-hoc signed and is not notarized.
+
+### Third-party data
+
+- Bundles the pinned MIT-licensed catalog snapshot, its license text, and the recorded enrichment snapshot. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- Does not vendor lib4u runtime address-list files.

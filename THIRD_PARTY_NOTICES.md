@@ -4,7 +4,7 @@
 
 ## Русский
 
-IPList встраивает лицензированный снимок каталога `pincetgore/amnezia-app-ru-list` как резервный источник. Остальные сетевые списки загружаются во время работы.
+IPList 1.4.0 встраивает лицензированный снимок каталога `pincetgore/amnezia-app-ru-list` и записанный снимок обогащения как резервные данные для чистой установки. Остальные сетевые списки загружаются во время работы и не вендорятся.
 
 ### pincetgore/amnezia-app-ru-list
 
@@ -32,7 +32,7 @@ IPList использует этот репозиторий как источн�
 - `amnezia-ip-lite.json`
 - `amnezia-ip.json`
 
-Файлы и скрипты из `lib4u/amnezia-tunneling-ru` в этот репозиторий не коммитятся.
+Файлы и скрипты из `lib4u/amnezia-tunneling-ru` в этот репозиторий не коммитятся и не помещаются в `IPList.app`.
 
 На момент подготовки проекта к публикации в апстрим-репозитории не было файла `LICENSE` в списке файлов на GitHub. Поэтому не копируйте, не вендорите, не зеркалируйте и не распространяйте сгенерированные им файлы списков внутри этого репозитория или в бинарных релизах, пока лицензия апстрима или разрешение мейнтейнера не будут прояснены.
 
@@ -40,21 +40,19 @@ IPList использует этот репозиторий как источн�
 
 Репозиторий: https://github.com/v2fly/domain-list-community
 
-IPList использует этот репозиторий как источник по умолчанию для метаданных категорий/доменов. Согласно метаданным репозитория на GitHub, апстрим-проект опубликован под лицензией MIT.
+IPList сохраняет URL этого MIT-лицензированного проекта для диагностики и совместимости с прежними настройками источников. Его файлы не включаются в репозиторий или приложение; действующий каталог 1.4.0 получает метаданные из `pincetgore/amnezia-app-ru-list`.
 
-Файлы из `v2fly/domain-list-community` в этот репозиторий не коммитятся.
-
-### AmneziaVPN
+### AmneziaVPN и AmneziaWG
 
 Сайт: https://amnezia.org/
 
-IPList экспортирует JSON, предназначенный для импорта в настройки раздельного туннелирования AmneziaVPN. IPList — независимый инструмент, не аффилированный с AmneziaVPN.
+IPList экспортирует JSON, предназначенный для импорта в настройки раздельного туннелирования AmneziaVPN, а также редактирует пользовательские `.conf` как данные AmneziaWG. IPList не включает код AmneziaVPN, AmneziaWG или WireGuard, не читает и не экспортирует `.vpn`, и не аффилирован с этими проектами.
 
 ---
 
 ## English
 
-IPList vendors a licensed snapshot of `pincetgore/amnezia-app-ru-list` as a bundled fallback. Other network lists are downloaded at runtime.
+IPList 1.4.0 vendors a licensed `pincetgore/amnezia-app-ru-list` catalog snapshot and a recorded enrichment snapshot as clean-install fallback data. Other network lists are downloaded at runtime and are not vendored.
 
 ### pincetgore/amnezia-app-ru-list
 
@@ -82,7 +80,7 @@ IPList uses this repository as the default runtime source for Amnezia-compatible
 - `amnezia-ip-lite.json`
 - `amnezia-ip.json`
 
-No files or scripts from `lib4u/amnezia-tunneling-ru` are committed into this repository.
+No files or scripts from `lib4u/amnezia-tunneling-ru` are committed into this repository or placed in `IPList.app`.
 
 At the time this project was prepared for publication, the upstream repository did not expose a `LICENSE` file in its GitHub file list. Because of that, do not copy, vendor, mirror, or redistribute its generated list files inside this repository or binary releases unless the upstream license or maintainer permission is clarified.
 
@@ -90,12 +88,10 @@ At the time this project was prepared for publication, the upstream repository d
 
 Repository: https://github.com/v2fly/domain-list-community
 
-IPList uses this repository as the default runtime source for category/domain metadata. The upstream project is published with an MIT license according to its GitHub repository metadata.
+IPList retains this MIT-licensed project's URL for source diagnostics and compatibility with prior source settings. Its files are not bundled in the repository or app; the active 1.4.0 catalog gets metadata from `pincetgore/amnezia-app-ru-list`.
 
-No files from `v2fly/domain-list-community` are committed into this repository.
-
-### AmneziaVPN
+### AmneziaVPN and AmneziaWG
 
 Website: https://amnezia.org/
 
-IPList exports JSON intended to be imported into AmneziaVPN split tunneling settings. IPList is an independent tool and is not affiliated with AmneziaVPN.
+IPList exports JSON intended to be imported into AmneziaVPN split tunneling settings and treats user-supplied `.conf` as AmneziaWG configuration data. IPList does not bundle AmneziaVPN, AmneziaWG, or WireGuard code, does not read or export `.vpn`, and is not affiliated with those projects.
