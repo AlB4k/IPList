@@ -9,7 +9,30 @@ struct StateChecks {
     static func main() throws {
         try testLegacyStateSurvivesAtomicCatalogMigration()
         try testCatalogSelectionControlsEveryExportMode()
+        try testLegacyRoutesRemainCurrentAndSelectable()
         print("State checks passed")
+    }
+
+    static func testLegacyRoutesRemainCurrentAndSelectable() throws {
+        var state = AppState()
+        state.catalog = ServiceCatalog(services: [CatalogService(
+            id: "legacy", name: "Legacy", targetedAddresses: ["192.0.2.10/32"],
+            liteAddresses: ["198.51.100.0/24"]
+        )])
+        state.selectedCatalogIDs = ["legacy"]
+        state.selected = ["legacy"]
+        state.selectionInitialized = true
+        let matched = MatchedCatalog(
+            catalog: ServiceCatalog(services: [CatalogService(id: "current", name: "Current")]),
+            routesByMode: [:],
+            unassignedRoutes: [.targeted: ["192.0.2.10/32"], .lite: ["192.0.2.0/24"]],
+            diagnostics: [], freshness: .fresh
+        )
+        check(state.applyMatchedCatalog(matched), "refresh applies")
+        check(!(state.unassignedRoutes[.targeted] ?? []).contains("192.0.2.10/32"), "legacy-owned route is removed from the remainder")
+        state.setCatalogSelection(["legacy"], enabled: false)
+        check(!state.exportRoutes(for: .targeted).contains("192.0.2.10/32"), "clearing legacy service removes its route")
+        check(!state.exportRoutes(for: .lite).contains("198.51.100.0/24"), "stale legacy route cannot survive outside current source")
     }
 
     // This catches a migration that replaces the old state before it has a complete,

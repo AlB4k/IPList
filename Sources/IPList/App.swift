@@ -532,8 +532,7 @@ struct ConfigurationWriteResult: Identifiable {
         for plan in plans {
             let temporary = destination.appendingPathComponent(".iplist-\(UUID().uuidString).tmp")
             do {
-                try plan.data.write(to: temporary, options: .atomic)
-                try fileManager.moveItem(at: temporary, to: plan.output)
+                try writePrivateFile(plan.data, temporary: temporary, output: plan.output, fileManager: fileManager)
                 results.append(ConfigurationWriteResult(name: plan.output.lastPathComponent, success: true,
                                                         message: "Проверено и сохранено отдельно."))
             } catch {

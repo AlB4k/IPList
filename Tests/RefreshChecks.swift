@@ -9,6 +9,7 @@ private func check(_ value: @autoclosure () -> Bool, _ message: String) {
 struct RefreshChecks {
     static func main() async throws {
         try await testSuccessfulRefreshReplacesEveryModeAndUsesCustomURLs()
+        try await testTargetedOnlyDomainBecomesSelectableService()
         try await testFailedSourceDoesNotMutateWorkingState()
         try await testFailedSourceReportsEveryRouteSource()
         try await testSuspiciousCatalogShrinkDoesNotMutateWorkingState()
@@ -24,6 +25,26 @@ struct RefreshChecks {
         try testPreMigrationBackupIsRawAndCreatedOnlyOnce()
         try testPreMigrationBackupDoesNotReplaceV11Backup()
         print("Refresh checks passed")
+    }
+
+    private static func testTargetedOnlyDomainBecomesSelectableService() async throws {
+        let pipeline = RefreshPipeline(dependencies: RefreshPipelineDependencies(
+            loadCatalog: { _ in ServiceCatalog(services: [CatalogService(id: "known", name: "Known", domains: ["known.example"])]) },
+            loadTargeted: { _ in [TargetedRoute(domain: "source-only.example", address: "192.0.2.44")] },
+            loadLite: { _ in [] }, loadFull: { _ in [] },
+            enrich: { catalog, _ in
+                check(catalog.services.contains { $0.id == "domain:source-only.example" }, "targeted-only domain is enriched as a selectable service")
+                return EnrichmentRefreshResult(snapshot: EnrichmentSnapshot(generatedAt: .now, provenance: "fixture", entries: []), diagnostics: [])
+            },
+            match: { catalog, targeted, lite, full, cache in
+                try CatalogMatcher().match(catalog: catalog, targeted: targeted, lite: lite, full: full, cached: cache)
+            }
+        ))
+        let transaction = try await pipeline.run(RefreshRequest(state: AppState()))
+        var state = AppState()
+        check(state.applyRefreshTransaction(transaction), "targeted-only refresh commits")
+        check(state.catalog?.services.contains { $0.id == "domain:source-only.example" && $0.targetedAddresses == ["192.0.2.44/32"] } == true,
+              "targeted-only service remains visible with its owned route")
     }
 
     // This catches the former mode-by-mode update path: it could publish one

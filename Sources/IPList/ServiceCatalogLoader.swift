@@ -1,5 +1,21 @@
 import Foundation
 
+enum LimitedDownloadError: Error { case tooLarge(Int) }
+
+func downloadDataLimited(session: URLSession, request: URLRequest, maxBytes: Int) async throws -> (Data, URLResponse) {
+    let (bytes, response) = try await session.bytes(for: request)
+    if response.expectedContentLength > Int64(maxBytes) {
+        throw LimitedDownloadError.tooLarge(Int(response.expectedContentLength))
+    }
+    var data = Data()
+    data.reserveCapacity(min(maxBytes, max(0, Int(response.expectedContentLength))))
+    for try await byte in bytes {
+        guard data.count < maxBytes else { throw LimitedDownloadError.tooLarge(data.count + 1) }
+        data.append(byte)
+    }
+    return (data, response)
+}
+
 struct ServiceCatalogLimits: Sendable {
     static let maxInputBytes = 4 * 1024 * 1024
     static let maxServices = 2_000
@@ -502,7 +518,9 @@ final class ServiceCatalogLoader: @unchecked Sendable {
         request.timeoutInterval = 12
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await downloadDataLimited(session: session, request: request, maxBytes: ServiceCatalogLimits.maxInputBytes)
+        } catch LimitedDownloadError.tooLarge(let bytes) {
+            throw ServiceCatalogError.inputTooLarge(bytes)
         } catch {
             throw ServiceCatalogError.remoteUnavailable(error.localizedDescription)
         }

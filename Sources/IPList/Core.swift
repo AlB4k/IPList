@@ -1,6 +1,19 @@
 import Foundation
 import Darwin
 
+func writePrivateFile(_ data: Data, temporary: URL, output: URL, fileManager: FileManager = .default) throws {
+    guard fileManager.createFile(atPath: temporary.path, contents: data,
+                                 attributes: [.posixPermissions: 0o600]) else {
+        throw CocoaError(.fileWriteUnknown)
+    }
+    do {
+        try fileManager.moveItem(at: temporary, to: output)
+    } catch {
+        try? fileManager.removeItem(at: temporary)
+        throw error
+    }
+}
+
 struct AmneziaEntry: Codable {
     var hostname: String
     var ip: String?
@@ -303,7 +316,16 @@ struct AppState: Codable {
         let previous = catalog?.services ?? services.map { legacy in
             CatalogService(id: legacy.id, name: legacy.name, category: legacy.category, domains: legacy.domains, asn: legacy.asn, targetedAddresses: legacy.addresses)
         }
-        let resolution = Self.resolveLegacyServices(previous, against: incoming)
+        var resolution = Self.resolveLegacyServices(previous, against: incoming)
+        var remainingUnassigned = matched.unassignedRoutes
+        for index in resolution.unmatched.indices {
+            resolution.unmatched[index].targetedAddresses = Self.claimCurrentRoutes(
+                resolution.unmatched[index].targetedAddresses, from: &remainingUnassigned[.targeted, default: []])
+            resolution.unmatched[index].liteAddresses = Self.claimCurrentRoutes(
+                resolution.unmatched[index].liteAddresses, from: &remainingUnassigned[.lite, default: []])
+            resolution.unmatched[index].fullAddresses = Self.claimCurrentRoutes(
+                resolution.unmatched[index].fullAddresses, from: &remainingUnassigned[.full, default: []])
+        }
         let finalServices = incoming + resolution.unmatched
         let currentSelection = catalog == nil ? selected : selectedCatalogIDs
         let newSelection = Self.migratedSelection(
@@ -326,15 +348,15 @@ struct AppState: Codable {
         let compatibilityServices = finalServices.map { service in
             Service(id: service.id, name: service.name, category: service.category, domains: service.domains, asn: service.asn, addresses: service.targetedAddresses)
         }
-        let newLiteAddresses = Set(finalServices.flatMap(\.liteAddresses)).union(matched.unassignedRoutes[.lite] ?? [])
-        let newFullAddresses = Set(finalServices.flatMap(\.fullAddresses)).union(matched.unassignedRoutes[.full] ?? [])
+        let newLiteAddresses = Set(finalServices.flatMap(\.liteAddresses)).union(remainingUnassigned[.lite] ?? [])
+        let newFullAddresses = Set(finalServices.flatMap(\.fullAddresses)).union(remainingUnassigned[.full] ?? [])
 
         stateVersion = 14
         catalog = finalCatalog
         services = compatibilityServices
         selectedCatalogIDs = newSelection
         selected = newSelection // Retained for 1.3 UI/state compatibility.
-        unassignedRoutes = matched.unassignedRoutes
+        unassignedRoutes = remainingUnassigned
         self.cachedEnrichment = cachedEnrichment ?? self.cachedEnrichment
         migrationDiagnostics = resolution.diagnostics
         profiles = newProfiles
@@ -535,6 +557,22 @@ struct AppState: Codable {
         let oldDomains = Set(old.domains.map { $0.lowercased() })
         let incomingDomains = Set(incoming.domains.map { $0.lowercased() })
         return !oldDomains.intersection(incomingDomains).isEmpty || !Set(old.asn).intersection(incoming.asn).isEmpty
+    }
+
+    private static func claimCurrentRoutes(_ legacy: [String], from unassigned: inout [String]) -> [String] {
+        let wanted = legacy.compactMap(IPv4Network.init)
+        guard !wanted.isEmpty else { return [] }
+        var claimed: [IPv4Network] = []
+        var remainder: [IPv4Network] = []
+        for source in unassigned.compactMap(IPv4Network.init) {
+            let intersections = wanted.compactMap { source.intersection($0) }
+            claimed.append(contentsOf: intersections)
+            var fragments = [source]
+            for cut in intersections { fragments = fragments.flatMap { $0.subtracting(cut) } }
+            remainder.append(contentsOf: fragments)
+        }
+        unassigned = collapseIPv4(remainder).map(\.description)
+        return collapseIPv4(claimed).map(\.description)
     }
 
     private static func migratedSelection(selected: Set<String>, incomingIDs: Set<String>, resolution: LegacyResolution, selectAllByDefault: Bool) -> Set<String> {
@@ -798,10 +836,11 @@ struct RefreshPipeline: Sendable {
             }
             try Task.checkCancellation()
 
+            let catalogWithSourceServices = Self.addTargetedOnlyServices(to: catalog, routes: targeted)
             let enrichmentStarted = Date()
             let enrichment: EnrichmentRefreshResult
             do {
-                enrichment = try await dependencies.enrich(catalog, request.cachedEnrichment)
+                enrichment = try await dependencies.enrich(catalogWithSourceServices, request.cachedEnrichment)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -816,7 +855,7 @@ struct RefreshPipeline: Sendable {
 
             let checks = ordered(loaded.checks + enrichmentChecks(enrichment, duration: Date().timeIntervalSince(enrichmentStarted)))
             do {
-                let matched = try dependencies.match(catalog, targeted, lite, full, enrichment.snapshot)
+                let matched = try dependencies.match(catalogWithSourceServices, targeted, lite, full, enrichment.snapshot)
                 try Task.checkCancellation()
                 return RefreshTransaction(
                     matchedCatalog: matched,
@@ -839,6 +878,17 @@ struct RefreshPipeline: Sendable {
                 throw RefreshPipelineError.validationFailure(ordered(checks + [failure]), error.localizedDescription)
             }
         }
+    }
+
+    private static func addTargetedOnlyServices(to catalog: ServiceCatalog, routes: [TargetedRoute]) -> ServiceCatalog {
+        let known = Set(catalog.services.flatMap(\.domains).map { $0.lowercased() })
+        let missing = Set(routes.compactMap(\.domain).filter { !known.contains($0) && IPv4Network($0) == nil })
+        guard !missing.isEmpty else { return catalog }
+        var result = catalog
+        result.services += missing.sorted().map {
+            CatalogService(id: "domain:\($0)", name: $0, category: "Прочие ресурсы", domains: [$0])
+        }
+        return result
     }
 
     private func loadSources(_ request: RefreshRequest) async throws -> LoadedSources {
@@ -1111,12 +1161,14 @@ actor CatalogLoader {
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await downloadDataLimited(
+                session: session, request: request, maxBytes: ServiceCatalogLimits.maxInputBytes)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard (200...299).contains(status) else { throw CatalogError.http(url, status) }
-            guard data.count <= 30_000_000 else { throw CatalogError.tooLarge(url) }
             guard !data.isEmpty else { throw CatalogError.empty(url) }
             return (data, status)
+        } catch LimitedDownloadError.tooLarge {
+            throw CatalogError.tooLarge(url)
         } catch let error as CatalogError {
             throw error
         } catch is CancellationError {

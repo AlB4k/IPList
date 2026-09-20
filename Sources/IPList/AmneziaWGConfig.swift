@@ -17,6 +17,7 @@ enum AmneziaWGConfigError: Error, LocalizedError {
     case invalidPeer
     case peerOverlap
     case routeLimit
+    case emptyAllowedIPs
 
     var errorDescription: String? {
         switch self {
@@ -29,6 +30,7 @@ enum AmneziaWGConfigError: Error, LocalizedError {
         case .invalidPeer: return "Выбранный peer отсутствует в конфигурации."
         case .peerOverlap: return "Новый маршрут пересекается с AllowedIPs другого peer."
         case .routeLimit: return "Слишком много фрагментов маршрутов после вычитания."
+        case .emptyAllowedIPs: return "Вычитание удаляет все AllowedIPs выбранного peer; пустая конфигурация не будет сохранена."
         }
     }
 }
@@ -102,6 +104,7 @@ struct AmneziaWGDocument {
         try validateNewOverlap(finalIPv4: finalIPv4, originalIPv4: existingIPv4,
                                finalIPv6: finalIPv6, originalIPv6: existingIPv6, selectedPeer: peer)
         let renderedRoutes = finalIPv4.map(\.description) + finalIPv6
+        guard !renderedRoutes.isEmpty else { throw AmneziaWGConfigError.emptyAllowedIPs }
         return replaceAllowedIPs(in: section, existing: allowedLines, routes: renderedRoutes)
     }
 }

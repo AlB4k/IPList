@@ -32,7 +32,7 @@ func allowedIPv4Routes(in config: String) -> [IPv4Network] {
 @main struct CoreTests {
     static func main() async throws {
         let tests = CoreTests()
-        tests.testIPv4AndCIDR(); tests.testIPv4NetworkSetOperations(); tests.testIPv4NetworkReferenceOracle(); tests.testAllowedIPsFormattingDeduplicatesExistingCoverage(); try tests.testAmneziaWGParsePreservesUnchangedBytes(); try tests.testAmneziaWGPreservesAllowedIPSuffixesAndOpaqueValues(); try tests.testAmneziaWGOperationsNormalizeRoutes(); try tests.testAmneziaWGRejectsUnsafeConfigurationsWithoutLeakingKeys(); try tests.testAmneziaWGLargeRouteRegression(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testProfileSaveReturnsCreatedOrUpdatedID(); tests.testCatalogDefaults(); tests.testManualGroups(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
+        tests.testIPv4AndCIDR(); tests.testIPv4NetworkSetOperations(); tests.testIPv4NetworkReferenceOracle(); tests.testAllowedIPsFormattingDeduplicatesExistingCoverage(); try tests.testAmneziaWGParsePreservesUnchangedBytes(); try tests.testAmneziaWGPreservesAllowedIPSuffixesAndOpaqueValues(); try tests.testAmneziaWGOperationsNormalizeRoutes(); try tests.testAmneziaWGRejectsUnsafeConfigurationsWithoutLeakingKeys(); try tests.testAmneziaWGRejectsEmptyBypass(); try tests.testPrivateConfigurationPermissions(); try tests.testAmneziaWGLargeRouteRegression(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testProfileSaveReturnsCreatedOrUpdatedID(); tests.testCatalogDefaults(); tests.testManualGroups(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
         print("All checks passed")
     }
     func testIPv4AndCIDR() {
@@ -142,6 +142,23 @@ func allowedIPv4Routes(in config: String) -> [IPv4Network] {
         XCTAssertEqual([first, second].count, 2)
         XCTAssertTrue(first.contains("192.0.2.0/24"))
         XCTAssertTrue(second.contains("198.51.100.0/24"))
+    }
+
+    func testAmneziaWGRejectsEmptyBypass() throws {
+        let document = try AmneziaWGDocument.parse("[Interface]\nPrivateKey = private\n\n[Peer]\nPublicKey = peer\nAllowedIPs = 192.0.2.1/32\n")
+        XCTAssertThrows(try document.render(peer: 0, operation: .bypass, routes: ["192.0.2.1/32"], preserveIPv6: true)) {
+            ($0 as? AmneziaWGConfigError)?.localizedDescription.contains("пустая конфигурация") == true
+        }
+    }
+
+    func testPrivateConfigurationPermissions() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let output = folder.appendingPathComponent("profile.conf")
+        try writePrivateFile(Data("PrivateKey = secret".utf8), temporary: folder.appendingPathComponent(".tmp"), output: output)
+        let attributes = try FileManager.default.attributesOfItem(atPath: output.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
     func testAmneziaWGRejectsUnsafeConfigurationsWithoutLeakingKeys() throws {
         let privateSecret = "PRIVATE-SECRET-DO-NOT-LOG"
