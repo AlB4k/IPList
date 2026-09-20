@@ -7,6 +7,7 @@ func task7Check(_ value: Bool, _ message: String) {
 @main struct Task7Checks {
     static func main() throws {
         try testCatalogSearch()
+        testCatalogSelectionAndRowCopy()
         testConfigurationRecommendations()
         try testPeerChoiceAndCollision()
         testBatchOutputNames()
@@ -40,6 +41,28 @@ func task7Check(_ value: Bool, _ message: String) {
             recommendedConfigurationOperation(existingRoutes: ["0.0.0.0/0"]) == .bypassOrReplace,
             "A default IPv4 route should recommend bypass or replacement"
         )
+    }
+
+    private static func testCatalogSelectionAndRowCopy() {
+        task7Check(
+            catalogSelectionAllModesExplanation.contains("во всех трёх режимах"),
+            "Settings must describe selection as applying in every export mode"
+        )
+        task7Check(
+            catalogSelectionAllModesExplanation.contains("Lite") &&
+                catalogSelectionAllModesExplanation.contains("Полный российский сегмент"),
+            "Settings must name the affected non-targeted modes"
+        )
+        let service = CatalogService(
+            id: "domains",
+            name: "Сервис",
+            domains: ["one.example", "two.example"],
+            targetedAddresses: ["192.0.2.0/24"]
+        )
+        let details = catalogServiceRowDetails(service: service, mode: .targeted, freshness: "данные свежие")
+        task7Check(details.contains("1 маршрут"), "Collapsed row must retain the current-mode route count")
+        task7Check(details.contains("2 домена"), "Collapsed row must retain the domain count")
+        task7Check(details.contains("данные свежие"), "Collapsed row must retain freshness")
     }
 
     private static func testPeerChoiceAndCollision() throws {

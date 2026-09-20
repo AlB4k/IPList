@@ -14,6 +14,33 @@ func catalogRoutes(for service: CatalogService, mode: ExportMode) -> [String] {
     }
 }
 
+let catalogSelectionAllModesExplanation = "Выбор сервисов и категорий действует во всех трёх режимах: Точечный обход, Lite и Полный российский сегмент."
+
+private func russianCount(_ count: Int, one: String, few: String, many: String) -> String {
+    let lastTwo = count % 100
+    let last = count % 10
+    let word: String
+    if (11...14).contains(lastTwo) {
+        word = many
+    } else if last == 1 {
+        word = one
+    } else if (2...4).contains(last) {
+        word = few
+    } else {
+        word = many
+    }
+    return "\(count) \(word)"
+}
+
+func catalogServiceRowDetails(service: CatalogService, mode: ExportMode, freshness: String) -> String {
+    let routes = russianCount(catalogRoutes(for: service, mode: mode).count,
+                              one: "маршрут", few: "маршрута", many: "маршрутов")
+    let domains = service.domains.isEmpty
+        ? "домены не указаны"
+        : russianCount(service.domains.count, one: "домен", few: "домена", many: "доменов")
+    return "\(routes) · \(domains) · \(freshness)"
+}
+
 func catalogMatches(service: CatalogService, query: String, mode: ExportMode) -> Bool {
     let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !needle.isEmpty else { return true }
@@ -812,7 +839,8 @@ struct ContentView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(service.name)
-                        Text("\(routes.count) маршрутов · \(serviceFreshnessText(service))").font(.caption).foregroundStyle(.secondary)
+                        Text(catalogServiceRowDetails(service: service, mode: store.state.mode, freshness: serviceFreshnessText(service)))
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if !service.asn.isEmpty { Text(service.asn.map { "AS\($0)" }.joined(separator: ", ")).foregroundStyle(.secondary).font(.caption) }
@@ -959,7 +987,7 @@ struct ContentView: View {
             Toggle("Включать «Мои IP» в выгружаемый файл", isOn: Binding(get: { store.state.manualEnabled }, set: { store.setManualEnabled($0) }))
             Text(store.state.mode.detail)
             Text("В AmneziaVPN выберите режим «Адреса из списка НЕ должны использовать VPN», затем импортируйте JSON.").font(.caption).foregroundStyle(.secondary)
-            Text("Во всех режимах учитываются выбранные сервисы, «Остальные сети источника» и включённые «Мои IP». Общая сеть остаётся, пока её использует хотя бы один выбранный сервис.").font(.caption).foregroundStyle(.secondary)
+            Text("\(catalogSelectionAllModesExplanation) Также учитываются «Остальные сети источника» и включённые «Мои IP». Общая сеть остаётся, пока её использует хотя бы один выбранный сервис.").font(.caption).foregroundStyle(.secondary)
             allowedIPsActions
             List(store.state.export.sorted(), id: \.self) { ip in
                 VStack(alignment: .leading) {
@@ -1045,7 +1073,7 @@ struct ContentView: View {
                 modePicker
                 Text(store.state.mode.detail).font(.caption).foregroundStyle(.secondary)
                 Text("Источник: \(activeSourceURL)").font(.caption).textSelection(.enabled)
-                Text("Выбор категорий применяется только к точечному обходу. Lite предназначен для Android/iOS, полный список — для десктопа.").font(.caption).foregroundStyle(.secondary)
+                Text("\(catalogSelectionAllModesExplanation) Lite рекомендуется для Android/iOS, полный список — для компьютера.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Профили выбора") { profilesView }
             Section("Значок приложения") {
