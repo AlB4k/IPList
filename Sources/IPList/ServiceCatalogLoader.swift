@@ -460,11 +460,12 @@ final class ServiceCatalogLoader: @unchecked Sendable {
                 throw error
             }
             if let lastSuccessfulCatalog {
-                var cached = lastSuccessfulCatalog
+                var cached = try applyingBundledOverrides(to: lastSuccessfulCatalog)
                 cached.freshness = .cached
                 return cached
             }
             if var fallbackCatalog {
+                fallbackCatalog = try applyingBundledOverrides(to: fallbackCatalog)
                 try validate(fallbackCatalog, against: previous)
                 fallbackCatalog.freshness = .cached
                 fallbackCatalog.sourceURL = fallbackCatalog.sourceURL ?? "saved-state"
@@ -566,6 +567,11 @@ final class ServiceCatalogLoader: @unchecked Sendable {
                let data = try? Data(contentsOf: url) { return data }
         }
         return nil
+    }
+
+    private func applyingBundledOverrides(to catalog: ServiceCatalog) throws -> ServiceCatalog {
+        guard let data = bundledOverridesData() else { return catalog }
+        return try applyCatalogOverrides(catalog, data: data)
     }
 }
 
