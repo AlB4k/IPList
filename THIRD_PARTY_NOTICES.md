@@ -17,7 +17,7 @@ SHA-256 включённых файлов:
 - `Resources/ThirdParty/pincetgore-config.yaml`: `d22b844be82ef80cbbb305adf5b9308245a97cfc6822c0c45a0d8897ea32b53e`
 - `Resources/ThirdParty/pincetgore-LICENSE`: `89e30247532df2f24ffa96e846f8697222c413cbb1593e6a975fdf5e19955f66`
 - `Resources/ThirdParty/enrichment-snapshot.json`: `b3f7af0481a6885e5e5353fb7e41ea957450d8835b50e48822f5995eed1dff2e`
-- `Resources/ThirdParty/iplist-service-overrides.json`: verified project data maintained by IPList; AS61293 and 185.12.152.0/22 were checked against RIPEstat and DNS on 2026-09-22.
+- `Resources/ThirdParty/iplist-service-overrides.json`: `336274340694cd8919470803dbfbdc7084cde1e29f20da9f31d446be970d49b6`; verified project data maintained by IPList. AS61293 and 185.12.152.0/22 were checked against RIPEstat and DNS on 2026-09-22.
 
 Лицензия: MIT. Текст лицензии включён в `Resources/ThirdParty/pincetgore-LICENSE`.
 
