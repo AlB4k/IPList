@@ -22,7 +22,7 @@
 
 ### Каталог, источники и выбор
 
-IPList получает адресные источники [lib4u/amnezia-tunneling-ru](https://github.com/lib4u/amnezia-tunneling-ru): `amnezia.json` (Targeted), `amnezia-ip-lite.json` (Lite) и `amnezia-ip.json` (Full). Метаданные каталога берутся из [pincetgore/amnezia-app-ru-list](https://github.com/pincetgore/amnezia-app-ru-list); в приложение включён проверенный снимок как резерв для чистой установки. DNS-записи запрашиваются через системный DNS macOS, ASN-префиксы — у RIPEstat. Подробнее о происхождении и лицензиях — в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+IPList получает адресные источники [lib4u/amnezia-tunneling-ru](https://github.com/lib4u/amnezia-tunneling-ru): `amnezia.json` (Targeted), `amnezia-ip-lite.json` (Lite) и `amnezia-ip.json` (Full). Метаданные каталога берутся из [pincetgore/amnezia-app-ru-list](https://github.com/pincetgore/amnezia-app-ru-list); в приложение включён проверенный снимок как резерв для чистой установки. Для подтверждённых пробелов upstream применяется небольшой локальный override, включая отдельную карточку 1С с сетью AS61293. DNS-записи запрашиваются через системный DNS macOS, ASN-префиксы — у RIPEstat. Подробнее о происхождении и лицензиях — в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Каталог содержит категории, сервисы, домены, ASN, явные диапазоны и найденные адреса для текущего режима. Поиск находит сервис по названию, домену, ASN, IP или пересекающемуся CIDR; например, «Аэрофлот» находится по `Аэрофлот`, `aeroflot.ru`, AS34571 и сопоставленному адресу. Сервисы, которых нет в метаданных, остаются видимы как «Дополнительные ресурсы lib4u», а неприписанные части исходников — как выбранные по умолчанию «Остальные сети источника».
 

@@ -442,6 +442,9 @@ final class ServiceCatalogLoader: @unchecked Sendable {
         do {
             let data = try await fetch(remoteURL)
             var candidate = try ServiceCatalogParser.parse(data)
+            if let overrideData = bundledOverridesData() {
+                candidate = try applyCatalogOverrides(candidate, data: overrideData)
+            }
             try validate(candidate, against: previous)
             candidate.freshness = .remote
             candidate.sourceURL = remoteURL.absoluteString
@@ -470,6 +473,7 @@ final class ServiceCatalogLoader: @unchecked Sendable {
             if let fallbackData {
                 do {
                     var candidate = try ServiceCatalogParser.parse(fallbackData)
+                    if let overrideData = bundledOverridesData() { candidate = try applyCatalogOverrides(candidate, data: overrideData) }
                     try validate(candidate, against: previous)
                     candidate.freshness = .cached
                     candidate.sourceURL = "bundled-or-cached"
@@ -484,6 +488,7 @@ final class ServiceCatalogLoader: @unchecked Sendable {
             if let bundled = bundledFallbackData() {
                 do {
                     var candidate = try ServiceCatalogParser.parse(bundled)
+                    if let overrideData = bundledOverridesData() { candidate = try applyCatalogOverrides(candidate, data: overrideData) }
                     try validate(candidate, against: previous)
                     candidate.freshness = .cached
                     candidate.sourceURL = "bundled-resource"
@@ -549,6 +554,15 @@ final class ServiceCatalogLoader: @unchecked Sendable {
         let bundles = [Bundle.main, Bundle(for: BundleMarker.self)]
         for bundle in bundles {
             if let url = bundle.url(forResource: "pincetgore-config", withExtension: "yaml", subdirectory: "ThirdParty"),
+               let data = try? Data(contentsOf: url) { return data }
+        }
+        return nil
+    }
+
+    private func bundledOverridesData() -> Data? {
+        let bundles = [Bundle.main, Bundle(for: BundleMarker.self)]
+        for bundle in bundles {
+            if let url = bundle.url(forResource: "iplist-service-overrides", withExtension: "json", subdirectory: "ThirdParty"),
                let data = try? Data(contentsOf: url) { return data }
         }
         return nil

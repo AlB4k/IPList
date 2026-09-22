@@ -17,8 +17,11 @@ SHA-256 включённых файлов:
 - `Resources/ThirdParty/pincetgore-config.yaml`: `d22b844be82ef80cbbb305adf5b9308245a97cfc6822c0c45a0d8897ea32b53e`
 - `Resources/ThirdParty/pincetgore-LICENSE`: `89e30247532df2f24ffa96e846f8697222c413cbb1593e6a975fdf5e19955f66`
 - `Resources/ThirdParty/enrichment-snapshot.json`: `b3f7af0481a6885e5e5353fb7e41ea957450d8835b50e48822f5995eed1dff2e`
+- `Resources/ThirdParty/iplist-service-overrides.json`: verified project data maintained by IPList; AS61293 and 185.12.152.0/22 were checked against RIPEstat and DNS on 2026-09-22.
 
 Лицензия: MIT. Текст лицензии включён в `Resources/ThirdParty/pincetgore-LICENSE`.
+
+Локальный override `iplist-service-overrides.json` не является копией исходного репозитория: это небольшой набор корректировок проекта IPList для восполнения подтверждённых пробелов каталога (в частности, отдельная карточка 1С). Он распространяется вместе с проектом под лицензией IPList.
 
 `enrichment-snapshot.json` получен 2026-09-19 22:14:59 +03:00 из включённого выше `config.yaml` (проверенный SHA-256 указан выше). Генератор `scripts/generate-enrichment-snapshot.swift` использовал системный DNS macOS через `DNSServiceGetAddrInfo` и официальный RIPEstat `announced-prefixes` (`https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS<asn>`). Запрошенное время наблюдения RIPEstat: `2026-09-19T19:14:59Z`; каждый запрос задаёт одночасовое окно, а принимаются только префиксы с timeline, покрывающим возвращённый `query_endtime`. Пределы: 8 параллельных запросов, 12 секунд на запрос, 60 секунд на весь запуск, 4 МиБ на ответ RIPEstat и 100000 префиксов RIPEstat. Снимок содержит 275 сервисов: DNS-доказательства есть у 274, префиксы ASN — у 88; 12 неполных записей явно помечены `stale`. В снимок не добавлялись выдуманные адреса; при сопоставлении его доказательства пересекаются с текущими маршрутами источника, а остальная часть остаётся неназначенной.
 

@@ -7,6 +7,7 @@ private func check(_ value: @autoclosure () -> Bool, _ message: String) {
 @main
 struct CatalogChecks {
     static func main() async throws {
+        try testVerifiedServiceOverride()
         try testAeroflotFixture()
         try testCategoryCommentsRequireSupportedHeading()
         try testValidationAndUnknownFields()
@@ -18,6 +19,14 @@ struct CatalogChecks {
         try await testNoFallbackFails()
         try await testLiveCatalog()
         print("Catalog checks passed")
+    }
+
+    static func testVerifiedServiceOverride() throws {
+        let catalog = ServiceCatalog(services: [CatalogService(id: "group", name: "Группа", domains: ["1c.ru", "other.example"])])
+        let data = Data(#"[{"id":"iplist:1c","name":"1С","category":"Работа и бизнес","domains":["1c.ru","users.v8.1c.ru"],"asn":[61293],"ipRanges":["185.12.152.0/22"],"detachDomains":["1c.ru"]}]"#.utf8)
+        let updated = try applyCatalogOverrides(catalog, data: data)
+        check(updated.services.contains { $0.id == "iplist:1c" && $0.asn == [61293] && $0.ipRanges == ["185.12.152.0/22"] }, "override creates the stable 1C service")
+        check(updated.services.first { $0.id == "group" }?.domains == ["other.example"], "override detaches duplicate domain")
     }
 
     static func testAeroflotFixture() throws {

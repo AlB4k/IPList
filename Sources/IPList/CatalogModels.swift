@@ -319,6 +319,35 @@ struct CatalogService: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// Small, auditable corrections for upstream metadata gaps.  These are kept as
+/// data so a source refresh cannot silently erase a verified service mapping.
+struct CatalogOverride: Codable, Hashable, Sendable {
+    var id: String
+    var name: String
+    var category: String
+    var domains: [String]
+    var asn: [Int]
+    var ipRanges: [String]
+    var detachDomains: [String]
+}
+
+func applyCatalogOverrides(_ catalog: ServiceCatalog, data: Data) throws -> ServiceCatalog {
+    let overrides = try JSONDecoder().decode([CatalogOverride].self, from: data)
+    var result = catalog
+    for override in overrides {
+        let detach = Set(override.detachDomains.map { $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) })
+        for index in result.services.indices {
+            result.services[index].domains.removeAll { detach.contains($0.lowercased()) }
+        }
+        result.services.removeAll { $0.domains.isEmpty && $0.ipRanges.isEmpty && $0.asn.isEmpty }
+        let service = CatalogService(id: override.id, name: override.name, category: override.category,
+                                     domains: override.domains, asn: override.asn, ipRanges: override.ipRanges)
+        result.services.removeAll { $0.id == service.id }
+        result.services.append(service)
+    }
+    return result
+}
+
 /// A validated catalog and the provenance of the data currently in use.
 struct ServiceCatalog: Codable, Hashable, Sendable {
     var services: [CatalogService]
