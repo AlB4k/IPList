@@ -39,21 +39,26 @@
 
 **Files:**
 - Create: `Windows/IPList.Windows.sln`, `Windows/src/IPList.Core/IPList.Core.csproj`, `Windows/tests/IPList.Core.Tests/IPList.Core.Tests.csproj`
+- Modify: `Windows/src/IPList.Core/IPList.Core.csproj` to embed licensed metadata and fallback resources
 - Create: `Windows/src/IPList.Core/Networking/IPv4Network.cs`, `RouteSet.cs`
 - Create: `Windows/src/IPList.Core/Catalog/CatalogModels.cs`, `ServiceCatalogParser.cs`, `CatalogMatcher.cs`
-- Create: `Windows/src/IPList.Core/Refresh/RefreshPipeline.cs`, `EnrichmentContracts.cs`
-- Create: `Windows/src/IPList.Core/Resources/ThirdParty/pincetgore-config.yaml`, `pincetgore-LICENSE`
-- Create: `Windows/tests/IPList.Core.Tests/IPv4NetworkTests.cs`, `ServiceCatalogParserTests.cs`, `CatalogMatcherTests.cs`, `RefreshPipelineTests.cs`, sanitized fixtures under `Windows/tests/IPList.Core.Tests/Fixtures/`
+- Create: `Windows/src/IPList.Core/Catalog/CatalogSearch.cs`
+- Create: `Windows/src/IPList.Core/Refresh/RefreshPipeline.cs`, `EnrichmentContracts.cs`, `HttpDataClient.cs`, `SourceHttpLoaders.cs`, `ServiceCatalogHttpLoader.cs`, `RipeStatHttpLoader.cs`
+- Create: `Windows/src/IPList.Core/Resources/ThirdParty/pincetgore-config.yaml`, `pincetgore-LICENSE`, `enrichment-snapshot.json`, `iplist-service-overrides.json`
+- Create: `Windows/tests/IPList.Core.Tests/IPv4NetworkTests.cs`, `ServiceCatalogParserTests.cs`, `CatalogMatcherTests.cs`, `CatalogSearchTests.cs`, `RefreshPipelineTests.cs`, `HttpDataLoaderTests.cs`, sanitized fixtures under `Windows/tests/IPList.Core.Tests/Fixtures/`
 
 **Interfaces:**
 - `IPv4Network.TryParse(string, out IPv4Network)`, `Contains`, `Intersects`, `Intersect`, and `Subtract(limit)`; `RouteSet.Normalize`, `Subtract`, `UnionEquals`.
-- `ServiceCatalogParser.Parse(ReadOnlySpan<byte>) -> ServiceCatalog`; `CatalogMatcher.Match(catalog, sources, cachedEvidence) -> MatchedCatalog`.
-- Inject `IDomainResolver.ResolveIPv4Async`, `IAsnPrefixLoader.LoadAsync`, and four source loaders into `RefreshPipeline.RunAsync(RefreshRequest, CancellationToken) -> RefreshTransaction`. The pipeline returns a complete candidate and diagnostics; it never mutates persisted state.
+- `ServiceCatalogParser.Parse(ReadOnlySpan<byte>) -> ServiceCatalog`; `CatalogMatcher.Match(catalog, sources, cachedEvidence) -> MatchedCatalog`; `CatalogSearch.Matches(service, query, mode)` searches name, domain, ASN, matched IP, and CIDR.
+- Production adapters: `ServiceCatalogHttpLoader.LoadAsync(Uri, CancellationToken) -> Task<ServiceCatalog>` for metadata, `AddressListHttpLoader.LoadAsync(Uri, ExportMode, CancellationToken) -> Task<SourceSnapshot>` for targeted/Lite/Full, and `RipeStatHttpLoader.LoadPrefixesAsync(int, CancellationToken) -> Task<IReadOnlyList<IPv4Network>>`; all use injected `HttpClient` through `HttpDataClient.GetLimitedAsync(Uri, CancellationToken) -> Task<byte[]>`.
+- Inject `IDomainResolver.ResolveIPv4Async(string, CancellationToken) -> Task<IReadOnlyList<IPAddress>>`, `IAsnPrefixLoader.LoadAsync(int, CancellationToken) -> Task<IReadOnlyList<IPv4Network>>`, and those four source loaders into `RefreshPipeline.RunAsync(RefreshRequest, CancellationToken) -> Task<RefreshTransaction>`. The pipeline returns a complete candidate and diagnostics; it never mutates persisted state.
 
-- [ ] Create the solution/projects targeting `net10.0` and `net10.0-windows`; reference Core from tests only and confirm the Core project has no WPF references.
-- [ ] From repository root, scaffold with `dotnet new sln -n IPList.Windows -o Windows --format sln`, `dotnet new classlib -n IPList.Core -o Windows/src/IPList.Core --framework net10.0`, `dotnet new wpf -n IPList.App -o Windows/src/IPList.App`, and `dotnet new xunit -n IPList.Core.Tests -o Windows/tests/IPList.Core.Tests --framework net10.0`; add all three projects using `dotnet sln Windows/IPList.Windows.sln add Windows/src/IPList.Core/IPList.Core.csproj Windows/src/IPList.App/IPList.App.csproj Windows/tests/IPList.Core.Tests/IPList.Core.Tests.csproj`, then set C# 13 and Windows target framework in the project files.
+- [ ] Create the solution/projects targeting `net10.0` and `net10.0-windows`; reference Core from tests and the WPF app, and confirm Core itself has no WPF references.
+- [ ] From repository root, scaffold with `dotnet new sln -n IPList.Windows -o Windows --format sln`, `dotnet new classlib -n IPList.Core -o Windows/src/IPList.Core --framework net10.0`, and `dotnet new xunit -n IPList.Core.Tests -o Windows/tests/IPList.Core.Tests --framework net10.0`; add Core and tests with `dotnet sln Windows/IPList.Windows.sln add Windows/src/IPList.Core/IPList.Core.csproj Windows/tests/IPList.Core.Tests/IPList.Core.Tests.csproj`, then set `LangVersion` to `13.0`.
 - [ ] Add fixed-seed network tests for host-bit normalization, containment/intersection, exact subtraction, semantic dedupe, adjacent collapse, numeric sort, `/0`, `/31`, `/32`, and fragment-limit rejection; use a small per-address `HashSet<uint>` oracle to prove set equality.
-- [ ] Parse sanitized YAML covering section categories, Aeroflot, `aeroflot.ru`, `api.aeroflot.ru`, AS34571, ranges, unknown keys, uncategorized services, duplicate IDs, invalid values, and every documented byte/item/string bound.
+- [ ] Parse sanitized YAML covering section categories, Aeroflot, `aeroflot.ru`, `api.aeroflot.ru`, AS34571, ranges, unknown keys, uncategorized services, duplicate IDs, invalid values, and every documented byte/item/string bound. Test search results for Aeroflot by name, domain, `AS34571`, matched IP, and containing CIDR.
+- [ ] Implement production HTTPS loaders for metadata `https://raw.githubusercontent.com/pincetgore/amnezia-app-ru-list/main/config.yaml`; lists `https://raw.githubusercontent.com/lib4u/amnezia-tunneling-ru/main/amnezia.json`, `https://raw.githubusercontent.com/lib4u/amnezia-tunneling-ru/main/amnezia-ip-lite.json`, and `https://raw.githubusercontent.com/lib4u/amnezia-tunneling-ru/main/amnezia-ip.json`; and RIPEstat `https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS<asn>`. Enforce HTTPS, HTTP success status, 4 MiB response cap, 12-second per-request timeout, shared maximum of 8 concurrent enrichment requests, and a 60-second refresh deadline; use injected `HttpMessageHandler` tests for success parsing and each rejection/limit.
+- [ ] Bundle the attributed `config.yaml` and LICENSE plus the verified project override and enrichment snapshot as Core resources; test clean-install fallback and override application without bundling lib4u generated address lists.
 - [ ] Use fake DNS, RIPEstat, and source loaders to test targeted matching, exact Lite/Full partitioning, shared ownership, selected remainder, full source-union equality, cached partial enrichment, suspicious shrink, timeout, cancellation, and failure without mutation of any committed state.
 - [ ] Run from repository root: `dotnet test Windows/tests/IPList.Core.Tests/IPList.Core.Tests.csproj --configuration Release`; expected: all Core tests pass.
 
@@ -61,20 +66,21 @@
 
 **Files:**
 - Create: `Windows/src/IPList.Core/State/AppState.cs`, `StateStore.cs`, `SelectionProfile.cs`, `ChangeRecord.cs`
+- Create: `Windows/src/IPList.Core/State/AppPersistenceCoordinator.cs`, `AutosavedExportStore.cs`
 - Create: `Windows/src/IPList.Core/Export/AmneziaJsonExporter.cs`, `AllowedIPsExporter.cs`
-- Modify: `Windows/src/IPList.Core/IPList.Core.csproj`
-- Create: `Windows/tests/IPList.Core.Tests/StateStoreTests.cs`, `SelectionTests.cs`, `ExportTests.cs`, `Fixtures/legacy-state.json`
+- Create: `Windows/tests/IPList.Core.Tests/StateStoreTests.cs`, `AppPersistenceCoordinatorTests.cs`, `AutosavedExportStoreTests.cs`, `SelectionTests.cs`, `ExportTests.cs`, `Fixtures/legacy-state.json`
 
 **Interfaces:**
 - `AppState.ExportRoutes(ExportMode)`, `SetSelection`, `ApplyProfile`, and `RecordChange` provide the single selection/export contract.
 - `StateStore.LoadAsync(path) -> StateLoadResult` and `SaveAsync(state, path, rawLegacyBytes)` perform schema validation, one-time backup, and atomic replacement.
+- `AppPersistenceCoordinator.CommitAsync(state, rawLegacyBytes)` is the only app-facing persistence entry point; `StateStore` alone writes `state.json`, and `AutosavedExportStore` alone writes `%LOCALAPPDATA%\\IPList\\amnezia-direct.json` through same-directory temp+replace. It stages both outputs and restores the prior files if either replacement fails. The WPF layer never writes either file directly; a refresh must pass validation before the coordinator is called.
 - `AmneziaJsonExporter.Serialize(routes) -> byte[]`; `AllowedIPsExporter.Format(routes) -> string` share normalized selected routes.
 
 - [ ] Model catalog IDs and per-mode remainder selections, manual IP/groups/notes, history (last 100), profiles, mode, source URLs, interval 1–720/manual, last-check data, freshness, notification flags, and unseen changes.
 - [ ] Add a sanitized pre-v1.4 fixture and prove backup creation precedes migration; failed decode or invalid candidate leaves original bytes and backup intact. Verify all manual data, profiles, schedule, URLs, history, and selections survive a successful migration and save/reload cycle.
 - [ ] Test fresh-install defaults (all services and remainders selected), deselection with shared route owners, manual-enabled toggle, profile save/apply/update, change history cap and viewed state.
 - [ ] Test Amnezia JSON records (`hostname`, empty `ip`, empty `ips`), `/32` rendering for bare IPs, semantic deduplication, covered-network removal, stable numeric order, and refusal to export an empty selection.
-- [ ] Test same-directory temporary write plus atomic replace behavior with an injected filesystem failure; verify prior state/export remains readable.
+- [ ] Test that the coordinator autosaves `amnezia-direct.json` after each accepted selection/mode/profile/refresh change, and is not called for a failed refresh. Inject state-write and export-write/replace failures and verify the last good state and export files remain readable and unchanged.
 - [ ] Run: `dotnet test Windows/tests/IPList.Core.Tests/IPList.Core.Tests.csproj --configuration Release`; expected: migration, selection, and export tests pass.
 
 ### Task 3: Implement the structure-preserving AmneziaWG editor
@@ -100,32 +106,31 @@
 - Create: `Windows/src/IPList.App/ViewModels/MainViewModel.cs`, `DialogViewModels.cs`
 - Create: `Windows/src/IPList.App/Services/WindowsDnsResolver.cs`, `WindowsNotifications.cs`, `TrayApplicationContext.cs`, `ScheduleService.cs`, `NativeFileDialogs.cs`, `ClipboardService.cs`
 - Modify: `Windows/IPList.Windows.sln`
-- Create: `Windows/src/IPList.App/Resources/` for attributed metadata only; `Windows/tests/IPList.Core.Tests/Fixtures/` remains synthetic
 
 **Interfaces:**
-- `MainViewModel` consumes `StateStore`, `RefreshPipeline`, and exporters; exposes `RefreshCommand`, `SetModeCommand`, selection/manual/profile/history/settings state, `IsBusy`, status, and safe user-facing errors.
+- `MainViewModel` consumes `AppPersistenceCoordinator`, `RefreshPipeline`, and exporters; exposes `RefreshCommand`, `SetModeCommand`, selection/manual/profile/history/settings state, `IsBusy`, status, and safe user-facing errors.
 - `TrayApplicationContext` offers Open, Refresh, Status, Exit; `ScheduleService` invokes the same guarded refresh command used by the window.
 - Dialog services use native Windows Open/Save/Folder dialogs; clipboard and notification failures do not fail refresh or export.
 
 - [ ] Implement the five pages in spec order—Catalog, My IP, Changes, Export, Settings—with the macOS section names/order, collapsed categories, search across name/domain/AS/IP/CIDR, per-mode service/remainder selection, freshness evidence, and clear empty/loading/error states.
-- [ ] Wire manual IP/group/note CRUD and Amnezia JSON import preview; preserve invalid-row reporting, dedupe normalization, clipboard, and manual-address exclusion from enrichment.
+- [ ] Wire manual IP/group/note CRUD and Amnezia JSON import preview; preserve invalid-row reporting, dedupe normalization, clipboard, and manual-address exclusion from enrichment. Send every accepted state change through `AppPersistenceCoordinator` so autosaved JSON stays aligned with state.
 - [ ] Wire JSON and `AllowedIPs` export, save/copy, folder open, `.conf` single/batch wizard, peer selection, three operations, IPv6 choice, Full-mode confirmation, and outputs beside user-selected files; never overwrite input files.
 - [ ] Wire source checks, four HTTPS URLs, 1–720-hour/manual schedule, tray lifetime, close-to-tray choice, refresh exclusion, status notifications, and history viewed state. A second app instance must not start a parallel refresh for the same state.
 - [ ] Keep WPF focus and keyboard behavior native; verify page layout at 100%, 125%, and 200%, and ensure no exception or key material appears in UI/log output.
-- [ ] On Windows run: `dotnet build Windows/src/IPList.App/IPList.App.csproj -c Release -r win-x64`; expected: WPF app builds and launches. Run Core tests with the Task 3 command.
+- [ ] Create the WPF project with `dotnet new wpf -n IPList.App -o Windows/src/IPList.App`, set `TargetFramework` to `net10.0-windows` and `LangVersion` to `13.0`, reference `IPList.Core`, and add it to `Windows/IPList.Windows.sln`. This task exclusively owns `IPList.App.csproj` and embeds no duplicate copy of Core's bundled resources.
+- [ ] On Windows run: `dotnet build Windows/IPList.Windows.sln -c Release`; expected: Core, tests, and WPF app build. Run Core tests with the Task 3 command.
 
 ### Task 5: Add Windows CI, self-contained ZIP, documentation, and acceptance evidence
 
 **Files:**
 - Create: `.github/workflows/windows.yml`
 - Create: `Windows/README.md`, `Windows/THIRD_PARTY_NOTICES.md`
-- Modify: `Windows/src/IPList.App/IPList.App.csproj` only for publish metadata/resources
 
 **Interfaces:**
 - Publish command: `dotnet publish Windows/src/IPList.App/IPList.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`.
 - Workflow artifact: `IPList-1.4.0-windows-x64.zip` with `IPList.exe`, README, notices, and `SHA256SUMS.txt`.
 
-- [ ] Add a `windows-latest` workflow that installs .NET 10 SDK, runs `dotnet test Windows/tests/IPList.Core.Tests/IPList.Core.Tests.csproj -c Release`, runs the exact publish command, asserts `IPList.exe` and embedded metadata exist, asserts no runtime prerequisite, creates the ZIP and SHA-256, and uploads the artifact. Do not edit macOS workflows.
+- [ ] Add a workflow triggered by both `push` and `pull_request` that installs .NET 10 SDK, runs `dotnet build Windows/IPList.Windows.sln -c Release`, runs `dotnet test Windows/tests/IPList.Core.Tests/IPList.Core.Tests.csproj -c Release`, runs the exact publish command, asserts `IPList.exe` and embedded metadata exist, asserts no runtime prerequisite, creates the ZIP and SHA-256, and uploads the artifact. Do not edit macOS workflows.
 - [ ] Document supported OS/architecture, first launch/SmartScreen behavior, data location, refresh/cache behavior, import/export, tray/schedule, `.conf` safety, `.vpn` exclusion, limitations of Full, and manual smoke checklist. Preserve MIT attribution for bundled `config.yaml`/LICENSE; do not include generated lib4u lists.
 - [ ] On clean Windows 10 22H2 and Windows 11 machines, unzip and launch without installed .NET; smoke-test 100/125/200% scaling, catalog search/selection, refresh/cache fallback, JSON import/export, copy/save `AllowedIPs`, single/batch `.conf`, tray/schedule, native dialogs, and persistence after restart.
 - [ ] Inspect ZIP contents and SHA-256; scan for `.vpn`, keys, user state, exports, `.app`, `AppIcon.icns`, and `dist`. Check `git diff --name-only` and confirm every source/workflow change is under `Windows/`, `.github/workflows/windows.yml`, or Windows documentation.
