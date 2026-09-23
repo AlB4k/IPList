@@ -41,6 +41,34 @@ public sealed class StatePersistenceTests
     }
 
     [Fact]
+    public async Task ApplyingLegacyProfileWithoutRemainderFieldPreservesCurrentRemainderSelection()
+    {
+        using var temp = new TempDirectory();
+        var path = Path.Combine(temp.Path, "state.json");
+        await File.WriteAllTextAsync(path, """
+            {
+              "schemaVersion": 1,
+              "profiles": {
+                "Old": {
+                  "name": "Old",
+                  "selectedServiceIds": ["sample-service"],
+                  "modes": ["Lite"],
+                  "includeManual": false
+                }
+              },
+              "remaindersSelectedByMode": { "Lite": false }
+            }
+            """);
+
+        var loaded = await new StateStore().LoadAsync(path);
+        Assert.Null(loaded.State.Profiles["Old"].IncludeRemainders);
+        loaded.State.ApplyProfile("Old");
+
+        Assert.False(loaded.State.RemaindersSelectedByMode[ExportMode.Lite]);
+        Assert.Equal(new[] { "sample-service" }, loaded.State.SelectedServiceIdsByMode[ExportMode.Lite]);
+    }
+
+    [Fact]
     public async Task MissingStateLoadsDefaultsAndLegacySchemaIsMarkedForMigration()
     {
         using var temp = new TempDirectory();

@@ -118,7 +118,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             catch { _state = (await new StateStore().LoadAsync(_statePath)).State; throw; }
             Status = $"Источники проверены: {candidate.CompletedAt.LocalDateTime:g}";
             Diagnostics.Clear();
-            foreach (var entry in candidate.Diagnostics) Diagnostics.Add($"{entry.Source}: {entry.Status} — {entry.Message}");
+            foreach (var entry in _state.LastDiagnostics) Diagnostics.Add($"{entry.Source}: {entry.Status} — {entry.Message}");
             RebuildServices(); RebuildHistory(); RebuildExport(); SignalAll();
             DataChanged?.Invoke(this, EventArgs.Empty);
         }

@@ -6,7 +6,7 @@ namespace IPList.Core.State;
 
 public sealed record ManualRoute(string Value, string? Group = null, string? Note = null);
 public sealed record SelectionProfile(string Name, HashSet<string> SelectedServiceIds,
-    HashSet<ExportMode> Modes, bool IncludeManual, bool IncludeRemainders = true);
+    HashSet<ExportMode> Modes, bool IncludeManual, bool? IncludeRemainders = null);
 
 public sealed class AppState
 {
@@ -82,7 +82,8 @@ public sealed class AppState
         {
             SelectedServiceIdsByMode[mode] = profile.SelectedServiceIds.ToList();
             SelectionInitializedByMode[mode] = true;
-            RemaindersSelectedByMode[mode] = profile.IncludeRemainders;
+            if (profile.IncludeRemainders is { } includeRemainders)
+                RemaindersSelectedByMode[mode] = includeRemainders;
         }
         if (profile.Modes.Count > 0 && !profile.Modes.Contains(Mode)) Mode = profile.Modes.Order().First();
         ManualEnabled = profile.IncludeManual;
