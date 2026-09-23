@@ -33,6 +33,20 @@ public sealed class RefreshPipelineTests
     }
 
     [Fact]
+    public async Task MetadataShrinkBelowSeventyPercentIsRejected()
+    {
+        var prior = new ServiceCatalog(Enumerable.Range(0, 10)
+            .Select(i => new CatalogService($"prior-{i}", $"Prior {i}", "X", [$"prior-{i}.example"], [], []))
+            .ToArray());
+        var candidate = new ServiceCatalog(Enumerable.Range(0, 6)
+            .Select(i => new CatalogService($"candidate-{i}", $"Candidate {i}", "X", [$"candidate-{i}.example"], [], []))
+            .ToArray());
+        var request = new RefreshRequest(RefreshSourceUrls.Default, prior);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Pipeline(candidate, new StubAddressLoader(), new StubDns(), new StubAsn())
+            .RunAsync(request, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task HardDeadlineAndCancellationDoNotPublishLateResult()
     {
         var prior = Catalog("a.example");
