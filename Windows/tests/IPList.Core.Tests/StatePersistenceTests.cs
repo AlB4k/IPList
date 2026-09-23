@@ -52,7 +52,7 @@ public sealed class StatePersistenceTests
                 "Old": {
                   "name": "Old",
                   "selectedServiceIds": ["sample-service"],
-                  "modes": ["Lite"],
+                  "modes": [1],
                   "includeManual": false
                 }
               },
