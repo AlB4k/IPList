@@ -78,8 +78,13 @@ public sealed class ScheduleService : IDisposable
 public sealed class TrayApplicationContext : IDisposable
 {
     private readonly Forms.NotifyIcon _icon;
+    private readonly System.Drawing.Icon _brandIcon;
+    private readonly Stream _iconStream;
     public TrayApplicationContext(Action open, Action refresh, Action status, Action exit)
     {
+        _iconStream = Application.GetResourceStream(new Uri("pack://application:,,,/Assets/AppIcon.ico"))?.Stream
+            ?? throw new FileNotFoundException("Не найден значок IPList.");
+        _brandIcon = new System.Drawing.Icon(_iconStream);
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("Открыть", null, (_, _) => open());
         menu.Items.Add("Проверить сейчас", null, (_, _) => refresh());
@@ -87,7 +92,7 @@ public sealed class TrayApplicationContext : IDisposable
         menu.Items.Add("Выход", null, (_, _) => exit());
         _icon = new Forms.NotifyIcon
         {
-            Icon = System.Drawing.SystemIcons.Application,
+            Icon = _brandIcon,
             Text = "IPList",
             ContextMenuStrip = menu,
             Visible = true
@@ -95,5 +100,5 @@ public sealed class TrayApplicationContext : IDisposable
         _icon.DoubleClick += (_, _) => open();
     }
     public Forms.NotifyIcon Icon => _icon;
-    public void Dispose() { _icon.Visible = false; _icon.Dispose(); }
+    public void Dispose() { _icon.Visible = false; _icon.Dispose(); _brandIcon.Dispose(); _iconStream.Dispose(); }
 }

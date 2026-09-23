@@ -77,6 +77,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
         $"Каталог: {_state.Catalog.Freshness}; данные: {(_state.Evidence?.Services.Values.Any(x => x.Freshness == EnrichmentFreshness.Stale) == true ? "устаревшие" : "доступны")}; {_state.LastSuccessfulRefreshAt?.LocalDateTime:g}";
     public string LastCheck => _state.LastCheckAt?.LocalDateTime.ToString("g") ?? "Проверок ещё не было";
     public bool HasUnseenChanges => !_state.ChangesViewed;
+    public int CatalogSelectionRevision { get; private set; }
+    public int TotalServiceCount => (_state.Catalog?.Services ?? BundledCatalog.Load().Services).Count;
+    public int SelectedServiceCount
+    {
+        get
+        {
+            var selected = CurrentSelectedIds().ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return (_state.Catalog?.Services ?? BundledCatalog.Load().Services).Count(service => selected.Contains(service.Id));
+        }
+    }
 
     public async Task LoadAsync()
     {
@@ -150,6 +160,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             InitializeModeSelection();
             _state.SetSelection(_state.Mode, id, selected);
         });
+        foreach (var row in Services.Where(row => row.Id == id)) row.Selected = selected;
+        CatalogSelectionRevision++;
+        OnPropertyChanged(nameof(CatalogSelectionRevision));
         RebuildExport();
     }
 
@@ -162,7 +175,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
             InitializeModeSelection();
             foreach (var id in ids) _state.SetSelection(_state.Mode, id, selected);
         });
-        RebuildServices(); RebuildExport();
+        foreach (var row in Services.Where(row => category is null || row.Category == category)) row.Selected = selected;
+        CatalogSelectionRevision++;
+        OnPropertyChanged(nameof(CatalogSelectionRevision));
+        RebuildExport();
     }
 
     public async Task SetRemainderAsync(bool selected)

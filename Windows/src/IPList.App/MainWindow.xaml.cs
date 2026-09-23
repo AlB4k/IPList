@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Media;
 using IPList.Core.Amnezia;
 using IPList.Core.Catalog;
@@ -38,6 +39,7 @@ public partial class MainWindow : Window
         _viewModel = new MainViewModel(new AppPersistenceCoordinator(new StateStore(), new AutosavedExportStore()),
             RefreshPipeline.Live(), dataDirectory);
         DataContext = _viewModel;
+        FooterVersion.Text = $"Версия {typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "—"}";
         CollectionViewSource.GetDefaultView(_viewModel.Services).GroupDescriptions.Add(new PropertyGroupDescription(nameof(ServiceRow.Category)));
         _viewModel.DataChanged += (_, _) => Dispatcher.Invoke(UpdateUi);
         _viewModel.PropertyChanged += (_, e) =>
@@ -75,6 +77,13 @@ public partial class MainWindow : Window
             ModeLite.IsChecked = _viewModel.Mode == ExportMode.Lite;
             ModeFull.IsChecked = _viewModel.Mode == ExportMode.Full;
             SidebarModeText.Text = ModeTitle(_viewModel.Mode);
+            TopModeText.Text = ModeTitle(_viewModel.Mode);
+            TopUpdateText.Text = _viewModel.State.Automatic
+                ? $"Проверка каждые {_viewModel.State.IntervalHours} ч"
+                : "Автопроверка выключена";
+            AllCategoriesCount.Text = $"{_viewModel.SelectedServiceCount}/{_viewModel.TotalServiceCount}";
+            AllCategoriesCheck.IsChecked = _viewModel.TotalServiceCount > 0 &&
+                _viewModel.SelectedServiceCount == _viewModel.TotalServiceCount;
             RemainderCheck.IsChecked = _viewModel.State.RemaindersSelectedByMode.TryGetValue(_viewModel.Mode, out var remainder)
                 ? remainder : _viewModel.State.SelectNewRemainders;
             ManualEnabledCheck.IsChecked = _viewModel.State.ManualEnabled;
@@ -168,18 +177,46 @@ public partial class MainWindow : Window
             buttons[i].FontWeight = i == index ? FontWeights.SemiBold : FontWeights.Normal;
             System.Windows.Automation.AutomationProperties.SetHelpText(buttons[i], i == index ? "Текущий раздел" : "Открыть раздел");
         }
+        NavHistory.ToolTip = _viewModel.HasUnseenChanges ? "Изменения — есть новые" : "Изменения";
     }
     private void AdaptSidebar()
     {
-        var compact = ActualWidth > 0 && ActualWidth < 980;
-        SidebarColumn.Width = new GridLength(compact ? 72 : 260);
-        SidebarLayout.Margin = compact ? new Thickness(8, 22, 8, 16) : new Thickness(20, 28, 20, 22);
+        var width = ActualWidth;
+        var compact = width > 0 && width < 980;
+        var wide = width >= 1400;
+        SidebarColumn.Width = new GridLength(compact ? 72 : Math.Clamp(width * 0.24, 260, 385));
+        SidebarLayout.Margin = compact ? new Thickness(8, 22, 8, 16) :
+            wide ? new Thickness(28, 65, 28, 24) : new Thickness(20, 28, 20, 22);
         SidebarBrand.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         SidebarFooter.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        BrandLogo.Width = BrandLogo.Height = wide ? 94 : 82;
+        BrandTitle.FontSize = wide ? 31 : 26;
+        BrandTagline.FontSize = wide ? 15 : 13;
         var labels = new[] { NavCatalogLabel, NavManualLabel, NavHistoryLabel, NavExportLabel, NavSettingsLabel };
         foreach (var label in labels) label.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         foreach (var button in new[] { NavCatalog, NavManual, NavHistory, NavExport, NavSettings })
-            button.Padding = compact ? new Thickness(10, 9, 8, 9) : new Thickness(14, 9, 14, 9);
+        {
+            button.Padding = compact ? new Thickness(5, 9, 5, 9) : new Thickness(14, 9, 14, 9);
+            button.MinHeight = wide ? 56 : 48;
+            button.FontSize = wide ? 17 : 15;
+        }
+    }
+    private void Sidebar_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Up or Key.Down or Key.Home or Key.End) || Keyboard.FocusedElement is not Button focused) return;
+        var buttons = new[] { NavCatalog, NavManual, NavHistory, NavExport, NavSettings };
+        var current = Array.IndexOf(buttons, focused);
+        if (current < 0) return;
+        var next = e.Key switch
+        {
+            Key.Home => 0,
+            Key.End => buttons.Length - 1,
+            Key.Up => (current + buttons.Length - 1) % buttons.Length,
+            _ => (current + 1) % buttons.Length
+        };
+        buttons[next].Focus();
+        Pages.SelectedIndex = next;
+        e.Handled = true;
     }
     private async void Service_Changed(object sender, RoutedEventArgs e)
     {
@@ -189,6 +226,12 @@ public partial class MainWindow : Window
     private async void Remainder_Changed(object sender, RoutedEventArgs e)
     {
         if (!_syncing) await TryAction(() => _viewModel.SetRemainderAsync(RemainderCheck.IsChecked == true));
+    }
+    private async void AllCategories_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_syncing || !_viewModel.IsLoaded || sender is not CheckBox check) return;
+        await TryAction(() => _viewModel.SelectAllAsync(check.IsChecked == true));
+        UpdateUi();
     }
     private async void SelectAll_Click(object sender, RoutedEventArgs e) => await TryAction(() => _viewModel.SelectAllAsync(true));
     private async void ClearAll_Click(object sender, RoutedEventArgs e) => await TryAction(() => _viewModel.SelectAllAsync(false));
