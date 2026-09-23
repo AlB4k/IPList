@@ -13,6 +13,7 @@ struct RefreshChecks {
         try await testFailedSourceDoesNotMutateWorkingState()
         try await testFailedSourceReportsEveryRouteSource()
         try await testSuspiciousCatalogShrinkDoesNotMutateWorkingState()
+        try await testSyntheticServicesDoNotTriggerMetadataShrink()
         try await testCachedPartialEnrichmentCanCommit()
         try await testBundledEvidenceBootstrapsFirstRefresh()
         try await testOverallDeadlineDoesNotMutateWorkingState()
@@ -146,6 +147,37 @@ struct RefreshChecks {
             check(error.sourceChecks.contains { $0.id == "metadata" && !$0.success }, "metadata shrink is surfaced as metadata failure")
         }
         check(encoded(state) == before, "suspicious metadata shrink leaves state unchanged")
+    }
+
+    // The persisted catalog combines YAML services with domains discovered in
+    // the targeted list. Only YAML services may be used as the shrink baseline.
+    private static func testSyntheticServicesDoNotTriggerMetadataShrink() async throws {
+        let metadata = (0..<276).map {
+            CatalogService(id: "pincetgore:service-\($0)", name: "Service \($0)", domains: ["service\($0).example"])
+        }
+        let synthetic = (0..<1486).map {
+            CatalogService(id: "domain:extra\($0).example", name: "extra\($0).example",
+                           category: "Прочие ресурсы", domains: ["extra\($0).example"])
+        }
+        var state = AppState()
+        state.catalog = ServiceCatalog(services: metadata + synthetic)
+        let persisted = try JSONDecoder().decode(AppState.self, from: encoded(state))
+        check(persisted.catalog?.services.count == 1762, "fixture reproduces the saved service count")
+        let previous = RefreshRequest(state: persisted).previousCatalog
+        check(previous?.services.count == 276, "synthetic services are excluded from YAML shrink baseline")
+
+        let yaml = "services:\n" + (0..<276).map {
+            "  - name: Service \($0)\n    domains: [service\($0).example]\n"
+        }.joined()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RefreshCatalogURLProtocol.self]
+        RefreshCatalogURLProtocol.body = Data(yaml.utf8)
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let loaded = try await ServiceCatalogLoader(session: session).load(
+            remoteURL: URL(string: "https://example.test/catalog.yaml")!, previousCatalog: previous)
+        check(loaded.services.count == 276 && loaded.freshness == .remote,
+              "complete YAML catalog refresh succeeds after a synthetic-service expansion")
     }
 
     // Production mutation that this test catches: treating a stale cached DNS
@@ -439,4 +471,17 @@ private enum FixtureError: LocalizedError {
 private actor URLRecorder {
     private(set) var urls: RefreshSourceURLs?
     func record(_ urls: RefreshSourceURLs) { self.urls = urls }
+}
+
+private final class RefreshCatalogURLProtocol: URLProtocol {
+    static var body = Data()
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }

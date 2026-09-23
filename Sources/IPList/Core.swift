@@ -625,7 +625,11 @@ struct RefreshRequest: Sendable {
 
     init(state: AppState, urls: RefreshSourceURLs? = nil) {
         if let existing = state.catalog {
-            let metadataServices = existing.services.filter { $0.category != "Дополнительные ресурсы lib4u" }
+            // Stored catalog also contains targeted-list domains; the metadata
+            // shrink guard must compare only services loaded from YAML.
+            let metadataServices = existing.services.filter {
+                $0.category != "Дополнительные ресурсы lib4u" && !$0.id.hasPrefix("domain:")
+            }
             previousCatalog = ServiceCatalog(
                 services: metadataServices,
                 freshness: existing.freshness,
