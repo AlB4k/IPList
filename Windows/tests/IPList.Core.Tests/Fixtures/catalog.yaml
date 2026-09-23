@@ -1,0 +1,17 @@
+dns:
+  nameservers: [1.1.1.1]
+services:
+  # ============================
+  # ТРАНСПОРТ, АВТО И КАРШЕРИНГ
+  # ============================
+  - name: "Аэрофлот"
+    asn: [34571]
+    ip_ranges:
+      - 95.163.0.0/16
+    domains:
+      - aeroflot.ru
+      - api.aeroflot.ru
+    extra: ignored
+  # random comment
+  - name: Unknown
+    domains: [other.example]

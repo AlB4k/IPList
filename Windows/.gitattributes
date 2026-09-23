@@ -1,0 +1,2 @@
+# Preserve the upstream MIT-licensed YAML byte for byte.
+src/IPList.Core/Resources/ThirdParty/pincetgore-config.yaml -whitespace
