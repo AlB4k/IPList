@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Media;
 using IPList.Core.Amnezia;
 using IPList.Core.Catalog;
 using IPList.Core.Networking;
@@ -29,7 +30,10 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        SizeChanged += (_, _) => AdaptSidebar();
+        AdaptSidebar();
         Pages.IsEnabled = false;
+        ModeBar.IsEnabled = false;
         var dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "IPList");
         _viewModel = new MainViewModel(new AppPersistenceCoordinator(new StateStore(), new AutosavedExportStore()),
             RefreshPipeline.Live(), dataDirectory);
@@ -45,18 +49,19 @@ public partial class MainWindow : Window
                 Dispatcher.Invoke(() =>
                 {
                     Pages.IsEnabled = _viewModel.IsLoaded;
+                    ModeBar.IsEnabled = _viewModel.IsLoaded;
                     if (_viewModel.Error.Length > 0) Alert(_viewModel.Error);
                     else if (_viewModel.State.NotificationsEnabled) _notifications.Show(_tray?.Icon, "IPList", _viewModel.Status);
                 });
             }
             else if (e.PropertyName == nameof(MainViewModel.IsBusy))
-                Dispatcher.Invoke(() => Pages.IsEnabled = false);
+                Dispatcher.Invoke(() => { Pages.IsEnabled = false; ModeBar.IsEnabled = false; });
         };
         _schedule = new ScheduleService(() => _viewModel.RefreshAsync());
         Loaded += async (_, _) =>
         {
-            try { await _viewModel.LoadAsync(); SyncSettingsForm(); UpdateUi(); Pages.IsEnabled = true; }
-            catch { Pages.IsEnabled = false; Alert("Не удалось прочитать локальное состояние. Исходный файл не изменён."); }
+            try { await _viewModel.LoadAsync(); SyncSettingsForm(); UpdateUi(); Pages.IsEnabled = true; ModeBar.IsEnabled = true; }
+            catch { Pages.IsEnabled = false; ModeBar.IsEnabled = false; Alert("Не удалось прочитать локальное состояние. Исходный файл не изменён."); }
         };
     }
 
@@ -66,10 +71,14 @@ public partial class MainWindow : Window
         _syncing = true;
         try
         {
-            CatalogMode.SelectedIndex = SettingsMode.SelectedIndex = (int)_viewModel.Mode;
+            ModeTargeted.IsChecked = _viewModel.Mode == ExportMode.Targeted;
+            ModeLite.IsChecked = _viewModel.Mode == ExportMode.Lite;
+            ModeFull.IsChecked = _viewModel.Mode == ExportMode.Full;
+            SidebarModeText.Text = ModeTitle(_viewModel.Mode);
             RemainderCheck.IsChecked = _viewModel.State.RemaindersSelectedByMode.TryGetValue(_viewModel.Mode, out var remainder)
                 ? remainder : _viewModel.State.SelectNewRemainders;
             ManualEnabledCheck.IsChecked = _viewModel.State.ManualEnabled;
+            ExportManualCheck.IsChecked = _viewModel.State.ManualEnabled;
             ExportSummary.Text = $"{ModeTitle(_viewModel.Mode)} · {_viewModel.RouteCount} маршрутов · {_viewModel.AddressCount:N0} адресов";
             LastCheckText.Text = "Последняя проверка: " + _viewModel.LastCheck;
             var selectedProfile = ProfileList.SelectedItem as string;
@@ -85,6 +94,7 @@ public partial class MainWindow : Window
             else if (!_viewModel.State.TrayEnabled && _tray is not null) { _tray.Dispose(); _tray = null; }
         }
         finally { _syncing = false; }
+        UpdateNavigation();
     }
 
     private void SyncSettingsForm()
@@ -118,11 +128,58 @@ public partial class MainWindow : Window
     {
         if (_viewModel is not null) _viewModel.Search = SearchBox.Text;
     }
-    private async void Mode_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void Mode_Checked(object sender, RoutedEventArgs e)
     {
-        if (_syncing || sender is not ComboBox box || box.SelectedItem is not ComboBoxItem item) return;
-        if (Enum.TryParse<ExportMode>(item.Tag as string, out var mode))
+        if (_syncing || sender is not RadioButton { Tag: string tag }) return;
+        if (Enum.TryParse<ExportMode>(tag, out var mode))
+        {
             await TryAction(() => _viewModel.SetModeAsync(mode));
+            UpdateUi();
+        }
+    }
+    private void Navigate_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string tag } && int.TryParse(tag, out var index))
+            Pages.SelectedIndex = index;
+    }
+    private void GoExport_Click(object sender, RoutedEventArgs e) => Pages.SelectedIndex = 3;
+    private void UpdateNavigation()
+    {
+        var buttons = new[] { NavCatalog, NavManual, NavHistory, NavExport, NavSettings };
+        var titles = new[] { "Каталог", "Мои IP", "Изменения", "Выгрузка", "Настройки" };
+        var subtitles = new[]
+        {
+            "Категории свёрнуты; поиск показывает подходящие ресурсы",
+            "IPv4 и CIDR, которые должны идти напрямую",
+            "Добавленные и удалённые адреса · последние 100 событий",
+            "Маршруты для AmneziaVPN и AmneziaWG",
+            "Режим выгрузки, источники и расписание"
+        };
+        var glyphs = new[] { "\uE8A5", "\uE774", "\uE81C", "\uE898", "\uE713" };
+        var index = Math.Clamp(Pages.SelectedIndex, 0, buttons.Length - 1);
+        PageHeading.Text = titles[index];
+        PageSubtitle.Text = subtitles[index];
+        PageGlyph.Text = glyphs[index];
+        ModeBar.Visibility = index is 0 or 3 or 4 ? Visibility.Visible : Visibility.Collapsed;
+        for (var i = 0; i < buttons.Length; i++)
+        {
+            buttons[i].Background = i == index ? new SolidColorBrush(Color.FromRgb(46, 109, 217)) : Brushes.Transparent;
+            buttons[i].BorderBrush = Brushes.Transparent;
+            buttons[i].FontWeight = i == index ? FontWeights.SemiBold : FontWeights.Normal;
+            System.Windows.Automation.AutomationProperties.SetHelpText(buttons[i], i == index ? "Текущий раздел" : "Открыть раздел");
+        }
+    }
+    private void AdaptSidebar()
+    {
+        var compact = ActualWidth > 0 && ActualWidth < 980;
+        SidebarColumn.Width = new GridLength(compact ? 72 : 260);
+        SidebarLayout.Margin = compact ? new Thickness(8, 22, 8, 16) : new Thickness(20, 28, 20, 22);
+        SidebarBrand.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        SidebarFooter.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        var labels = new[] { NavCatalogLabel, NavManualLabel, NavHistoryLabel, NavExportLabel, NavSettingsLabel };
+        foreach (var label in labels) label.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        foreach (var button in new[] { NavCatalog, NavManual, NavHistory, NavExport, NavSettings })
+            button.Padding = compact ? new Thickness(10, 9, 8, 9) : new Thickness(14, 9, 14, 9);
     }
     private async void Service_Changed(object sender, RoutedEventArgs e)
     {
@@ -145,7 +202,11 @@ public partial class MainWindow : Window
     }
     private async void ManualEnabled_Changed(object sender, RoutedEventArgs e)
     {
-        if (!_syncing) await TryAction(() => _viewModel.SetManualEnabledAsync(ManualEnabledCheck.IsChecked == true));
+        if (!_syncing && sender is CheckBox check)
+        {
+            await TryAction(() => _viewModel.SetManualEnabledAsync(check.IsChecked == true));
+            UpdateUi();
+        }
     }
     private async void AddManual_Click(object sender, RoutedEventArgs e)
     {
@@ -218,7 +279,9 @@ public partial class MainWindow : Window
 
     private async void Pages_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (e.Source == Pages && Pages.SelectedIndex == 2 && _viewModel.IsLoaded)
+        if (e.Source != Pages || _viewModel is null) return;
+        UpdateNavigation();
+        if (Pages.SelectedIndex == 2 && _viewModel.IsLoaded)
             await TryAction(_viewModel.MarkChangesViewedAsync);
     }
     private void SaveJson_Click(object sender, RoutedEventArgs e)

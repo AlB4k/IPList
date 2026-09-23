@@ -13,6 +13,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets/AppIcon.png" />
+    <Resource Include="Assets/AppIcon.ico" />
     <ProjectReference Include="../IPList.Core/IPList.Core.csproj" />
   </ItemGroup>
 </Project>
