@@ -22,7 +22,10 @@ jobs:
         shell: pwsh
         run: |
           if (!(Test-Path artifacts/publish/IPList.exe)) { throw 'IPList.exe missing' }
-          if (Get-ChildItem artifacts/publish -Recurse -Include *.vpn,*.conf,*.key) { throw 'Sensitive files in artifact' }
+          $forbiddenExtensions = @('.vpn', '.conf', '.key', '.pem', '.p12', '.pfx')
+          $forbiddenFiles = Get-ChildItem artifacts/publish -Recurse -File | Where-Object { $forbiddenExtensions -contains $_.Extension.ToLowerInvariant() }
+          if ($forbiddenFiles) { throw "Personal config or key material found in publish output: $($forbiddenFiles.FullName -join ', ')" }
+          if (Get-ChildItem artifacts/publish -Recurse -Directory | Where-Object { $_.Name -eq 'Fixtures' }) { throw 'Test fixtures found in publish output' }
           Copy-Item Windows/README.md artifacts/publish/README.md
           Copy-Item Windows/THIRD_PARTY_NOTICES.md artifacts/publish/THIRD_PARTY_NOTICES.md
           Compress-Archive -Path artifacts/publish/* -DestinationPath IPList-1.4.0-windows-x64.zip
