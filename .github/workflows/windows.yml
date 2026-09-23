@@ -24,6 +24,7 @@ jobs:
           if (!(Test-Path artifacts/publish/IPList.exe)) { throw 'IPList.exe missing' }
           if (Get-ChildItem artifacts/publish -Recurse -Include *.vpn,*.conf,*.key) { throw 'Sensitive files in artifact' }
           Copy-Item Windows/README.md artifacts/publish/README.md
+          Copy-Item Windows/THIRD_PARTY_NOTICES.md artifacts/publish/THIRD_PARTY_NOTICES.md
           Compress-Archive -Path artifacts/publish/* -DestinationPath IPList-1.4.0-windows-x64.zip
           (Get-FileHash IPList-1.4.0-windows-x64.zip -Algorithm SHA256).Hash | Out-File SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
