@@ -5,8 +5,8 @@ using IPList.Core.Refresh;
 namespace IPList.Core.State;
 
 public sealed record ManualRoute(string Value, string? Group = null, string? Note = null);
-public sealed record SelectionProfile(string Name, IReadOnlySet<string> SelectedServiceIds,
-    IReadOnlySet<ExportMode> Modes, bool IncludeManual);
+public sealed record SelectionProfile(string Name, HashSet<string> SelectedServiceIds,
+    HashSet<ExportMode> Modes, bool IncludeManual, bool IncludeRemainders = true);
 
 public sealed class AppState
 {
@@ -82,6 +82,7 @@ public sealed class AppState
         {
             SelectedServiceIdsByMode[mode] = profile.SelectedServiceIds.ToList();
             SelectionInitializedByMode[mode] = true;
+            RemaindersSelectedByMode[mode] = profile.IncludeRemainders;
         }
         if (profile.Modes.Count > 0 && !profile.Modes.Contains(Mode)) Mode = profile.Modes.Order().First();
         ManualEnabled = profile.IncludeManual;
@@ -97,6 +98,54 @@ public sealed class AppState
     public void ApplyRefresh(RefreshTransaction transaction)
     {
         var previous = MatchedRoutesByMode;
+        var previousServices = (Catalog?.Services ?? []).Concat(LegacyServices)
+            .GroupBy(service => service.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First()).ToArray();
+        var currentServices = transaction.MatchedCatalog.Catalog.Services;
+        var currentIds = currentServices.Select(service => service.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var previousIds = previousServices.Select(service => service.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var oldByToken = previousServices.SelectMany(service => IdentityTokens(service)
+            .Select(token => (Token: token, Service: service)))
+            .GroupBy(item => item.Token, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Select(item => item.Service.Id)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), StringComparer.OrdinalIgnoreCase);
+        var newByToken = currentServices.SelectMany(service => IdentityTokens(service)
+            .Select(token => (Token: token, Service: service)))
+            .GroupBy(item => item.Token, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Select(item => item.Service.Id)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), StringComparer.OrdinalIgnoreCase);
+        var renameCandidates = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        var unambiguousEvidence = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var service in currentServices.Where(service => !previousIds.Contains(service.Id)))
+        {
+            var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var hasHistoricalIdentity = false;
+            var allMatchesUnique = true;
+            foreach (var token in IdentityTokens(service))
+            {
+                if (!oldByToken.TryGetValue(token, out var oldIds)) continue;
+                hasHistoricalIdentity = true;
+                candidates.UnionWith(oldIds.Where(id => !currentIds.Contains(id)));
+                if (oldIds.Length != 1 || newByToken[token].Length != 1 || currentIds.Contains(oldIds[0]))
+                    allMatchesUnique = false;
+            }
+            if (hasHistoricalIdentity) renameCandidates[service.Id] = candidates;
+            if (hasHistoricalIdentity && allMatchesUnique) unambiguousEvidence.Add(service.Id);
+        }
+        var oldCandidateCounts = renameCandidates.Values.SelectMany(ids => ids)
+            .GroupBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+        var recovered = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var ambiguous = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (newId, candidates) in renameCandidates)
+        {
+            if (candidates.Count == 1 && unambiguousEvidence.Contains(newId) &&
+                oldCandidateCounts[candidates.Single()] == 1)
+                recovered[newId] = candidates.Single();
+            else ambiguous.Add(newId);
+        }
         if (SelectedServiceIds.Count > 0)
             foreach (var mode in transaction.MatchedCatalog.RoutesByMode.Keys)
                 if (!SelectedServiceIdsByMode.ContainsKey(mode))
@@ -105,11 +154,26 @@ public sealed class AppState
                     SelectionInitializedByMode[mode] = true;
                 }
         var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (Catalog is not null) known.UnionWith(Catalog.Services.Select(service => service.Id));
+        known.UnionWith(previousIds);
         known.UnionWith(LegacyServices.Select(service => service.Id));
         known.UnionWith(SelectedServiceIds);
         foreach (var services in previous.Values) known.UnionWith(services.Keys);
         var hasHistoricalInventory = Catalog is not null || LegacyServices.Count > 0 || previous.Count > 0;
+        foreach (var (mode, services) in transaction.MatchedCatalog.RoutesByMode)
+            if (SelectionInitializedByMode.GetValueOrDefault(mode) &&
+                SelectedServiceIdsByMode.TryGetValue(mode, out var ids))
+            {
+                foreach (var (newId, oldId) in recovered)
+                {
+                    var wasSelected = ids.Contains(oldId, StringComparer.OrdinalIgnoreCase);
+                    ids.RemoveAll(id => id.Equals(oldId, StringComparison.OrdinalIgnoreCase));
+                    if (wasSelected && services.ContainsKey(newId) &&
+                        !ids.Contains(newId, StringComparer.OrdinalIgnoreCase)) ids.Add(newId);
+                }
+                foreach (var newId in ambiguous)
+                    foreach (var oldId in renameCandidates[newId])
+                        ids.RemoveAll(id => id.Equals(oldId, StringComparison.OrdinalIgnoreCase));
+            }
         if (SelectNewServices)
             foreach (var (mode, services) in transaction.MatchedCatalog.RoutesByMode)
                 if (SelectionInitializedByMode.GetValueOrDefault(mode) &&
@@ -117,7 +181,8 @@ public sealed class AppState
                 {
                     if (hasHistoricalInventory)
                         foreach (var id in services.Keys)
-                            if (!known.Contains(id) && !ids.Contains(id, StringComparer.OrdinalIgnoreCase)) ids.Add(id);
+                            if (!known.Contains(id) && !recovered.ContainsKey(id) && !ambiguous.Contains(id) &&
+                                !ids.Contains(id, StringComparer.OrdinalIgnoreCase)) ids.Add(id);
                 }
         Catalog = transaction.MatchedCatalog.Catalog;
         MatchedRoutesByMode = transaction.MatchedCatalog.RoutesByMode.ToDictionary(
@@ -127,9 +192,21 @@ public sealed class AppState
             pair => pair.Key, pair => pair.Value.ToList());
         SourceSnapshots = transaction.SourceSnapshots.ToDictionary(pair => pair.Key, pair => pair.Value);
         Evidence = transaction.Enrichment;
-        LastDiagnostics = transaction.Diagnostics.ToList();
+        LastDiagnostics = transaction.Diagnostics.Concat(ambiguous.Select(id =>
+            new MatchDiagnostics("selection", "ambiguous", $"Selection for {id} could not be recovered unambiguously."))).ToList();
         LastCheckAt = transaction.CompletedAt;
         LastSuccessfulRefreshAt = transaction.CompletedAt;
+    }
+
+    private static IEnumerable<string> IdentityTokens(CatalogService service)
+    {
+        foreach (var domain in service.Domains)
+        {
+            var normalized = domain.Trim().TrimEnd('.').ToLowerInvariant();
+            if (normalized.Length > 0) yield return "domain:" + normalized;
+        }
+        foreach (var asn in service.Asns)
+            if (asn > 0) yield return "asn:" + asn;
     }
 }
 

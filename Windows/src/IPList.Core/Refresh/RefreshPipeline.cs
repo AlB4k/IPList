@@ -59,10 +59,11 @@ public sealed class RefreshPipeline(
                 ? previousCatalog with { Freshness = CatalogFreshness.Cached }
                 : BundledCatalog.Load();
         }
-        if (request.PreviousCatalog is { } previous && catalog.Services.Count < Math.Ceiling(previous.Services.Count * 0.7))
+        var metadataCount = catalog.Services.Count(IsMetadataService);
+        if (request.PreviousCatalog is { } previous && metadataCount < Math.Ceiling(previous.Services.Count(IsMetadataService) * 0.7))
             throw new InvalidOperationException("Suspicious catalog shrink; previous state retained.");
-        if (catalog.Services.Count == 0) throw new InvalidOperationException("Catalog is empty.");
-        checks.Add(new MatchDiagnostics("metadata", "ok", $"{catalog.Services.Count} services"));
+        if (metadataCount == 0) throw new InvalidOperationException("Catalog is empty.");
+        checks.Add(new MatchDiagnostics("metadata", "ok", $"{metadataCount} services"));
         var sources = new Dictionary<ExportMode, SourceSnapshot>
         {
             [ExportMode.Targeted] = await targetedTask.ConfigureAwait(false),
@@ -80,6 +81,9 @@ public sealed class RefreshPipeline(
         checks.Add(new MatchDiagnostics("matching", "ok", "Source unions verified"));
         return new RefreshTransaction(matched, refreshed, checks, sources, now);
     }
+
+    private static bool IsMetadataService(CatalogService service) =>
+        !service.Id.StartsWith("lib4u:", StringComparison.OrdinalIgnoreCase);
 
     private static void ValidateSourceShrink(RefreshRequest request,
         IReadOnlyDictionary<ExportMode, SourceSnapshot> sources)

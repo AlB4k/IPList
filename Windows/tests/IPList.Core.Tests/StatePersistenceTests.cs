@@ -19,7 +19,7 @@ public sealed class StatePersistenceTests
             SelectedRemainders = ["192.0.2.0/24"],
             Profiles = new Dictionary<string, SelectionProfile>(StringComparer.OrdinalIgnoreCase)
             {
-                ["Home"] = new("Home", new HashSet<string>(["sample-service"]), new HashSet<ExportMode>([ExportMode.Lite]), false)
+                ["Home"] = new("Home", new HashSet<string>(["sample-service"]), new HashSet<ExportMode>([ExportMode.Lite]), false, false)
             }
         };
         var store = new StateStore();
@@ -35,6 +35,9 @@ public sealed class StatePersistenceTests
         Assert.Equal(state.SelectedServiceIds, loaded.State.SelectedServiceIds);
         Assert.Equal(state.SelectedRemainders, loaded.State.SelectedRemainders);
         Assert.Contains("Home", loaded.State.Profiles.Keys);
+        loaded.State.ApplyProfile("Home");
+        Assert.Equal(new[] { "sample-service" }, loaded.State.SelectedServiceIdsByMode[ExportMode.Lite]);
+        Assert.False(loaded.State.RemaindersSelectedByMode[ExportMode.Lite]);
     }
 
     [Fact]

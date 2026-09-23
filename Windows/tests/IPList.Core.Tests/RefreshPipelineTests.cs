@@ -47,6 +47,36 @@ public sealed class RefreshPipelineTests
     }
 
     [Fact]
+    public async Task DerivedLib4uServicesDoNotInflateMetadataShrinkBaseline()
+    {
+        var metadata = Catalog("a.example");
+        var prior = new ServiceCatalog(metadata.Services.Concat(Enumerable.Range(0, 9)
+            .Select(i => new CatalogService($"lib4u:extra-{i}", $"Extra {i}", "lib4u",
+                [$"extra-{i}.example"], [], []))).ToArray());
+
+        var candidate = await Pipeline(metadata, new StubAddressLoader(), new StubDns(), new StubAsn())
+            .RunAsync(new RefreshRequest(RefreshSourceUrls.Default, prior), CancellationToken.None);
+
+        Assert.Equal("a", Assert.Single(candidate.MatchedCatalog.Catalog.Services).Id);
+    }
+
+    [Fact]
+    public async Task DerivedLib4uServicesDoNotMaskRealMetadataShrink()
+    {
+        var prior = new ServiceCatalog(Enumerable.Range(0, 10)
+            .Select(i => new CatalogService($"prior-{i}", $"Prior {i}", "X", [$"prior-{i}.example"], [], []))
+            .ToArray());
+        var candidate = new ServiceCatalog(Enumerable.Range(0, 6)
+            .Select(i => new CatalogService($"candidate-{i}", $"Candidate {i}", "X", [$"candidate-{i}.example"], [], []))
+            .Concat(Enumerable.Range(0, 9).Select(i => new CatalogService($"lib4u:extra-{i}", $"Extra {i}",
+                "lib4u", [$"extra-{i}.example"], [], []))).ToArray());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Pipeline(candidate, new StubAddressLoader(), new StubDns(), new StubAsn())
+                .RunAsync(new RefreshRequest(RefreshSourceUrls.Default, prior), CancellationToken.None));
+    }
+
+    [Fact]
     public async Task HardDeadlineAndCancellationDoNotPublishLateResult()
     {
         var prior = Catalog("a.example");
