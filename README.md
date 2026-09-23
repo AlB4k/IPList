@@ -18,7 +18,9 @@
 
 ## Русский
 
-**IPList 1.4.0** — нативное приложение для macOS 13+, которое собирает и поддерживает список IPv4/CIDR для раздельного туннелирования AmneziaVPN и AmneziaWG. Оно показывает обновляемый каталог российских сервисов, помогает выбрать нужные маршруты и создаёт JSON для AmneziaVPN либо строку `AllowedIPs` и отдельные копии `.conf` для AmneziaWG.
+**IPList 1.4.1** — нативное приложение для macOS 13+, которое собирает и поддерживает список IPv4/CIDR для раздельного туннелирования AmneziaVPN и AmneziaWG. Оно показывает обновляемый каталог российских сервисов, помогает выбрать нужные маршруты и создаёт JSON для AmneziaVPN либо строку `AllowedIPs` и отдельные копии `.conf` для AmneziaWG.
+
+[Скачать рекомендуемую версию 1.4.1](https://github.com/AlB4k/IPList/releases/download/v1.4.1/IPList-1.4.1.dmg). Обновление исправляет ложное сообщение об уменьшении каталога при проверке источников после 1.4.0; сохранённые данные остаются на месте.
 
 ### Каталог, источники и выбор
 
@@ -78,7 +80,7 @@ Full содержит очень большой набор маршрутов. �
 open dist/IPList.app
 ```
 
-Сборка подписана ad-hoc (`codesign --sign -`) и не нотаризована. На другом Mac Gatekeeper потребует явного подтверждения первого запуска; для публичного распространения требуется Developer ID и нотарификация.
+Сборка подписана ad-hoc (`codesign --sign -`) и не нотаризована. На другом Mac Gatekeeper может потребовать явного подтверждения первого запуска. Для установки без этого шага нужны Developer ID и нотарификация.
 
 Проверки разработчика:
 
@@ -100,7 +102,9 @@ IPLIST_LIVE_TEST=1 ./scripts/test.sh
 
 ## English
 
-**IPList 1.4.0** is a native macOS 13+ app that builds and maintains IPv4/CIDR lists for AmneziaVPN and AmneziaWG split tunneling. It presents an updatable Russian-service catalog, lets you select routes, and creates either AmneziaVPN JSON or an `AllowedIPs` line and separate AmneziaWG `.conf` outputs.
+**IPList 1.4.1** is a native macOS 13+ app that builds and maintains IPv4/CIDR lists for AmneziaVPN and AmneziaWG split tunneling. It presents an updatable Russian-service catalog, lets you select routes, and creates either AmneziaVPN JSON or an `AllowedIPs` line and separate AmneziaWG `.conf` outputs.
+
+[Download the recommended 1.4.1 release](https://github.com/AlB4k/IPList/releases/download/v1.4.1/IPList-1.4.1.dmg). This update fixes a false catalog shrink warning during source checks after 1.4.0; existing data is preserved.
 
 ### Catalog, sources, and selection
 
@@ -160,7 +164,7 @@ Build the local app:
 open dist/IPList.app
 ```
 
-The bundle is ad-hoc signed (`codesign --sign -`) and not notarized. Gatekeeper requires an explicit first-launch confirmation on another Mac; public distribution requires a Developer ID signature and notarization.
+The bundle is ad-hoc signed (`codesign --sign -`) and not notarized. Gatekeeper may require an explicit first-launch confirmation on another Mac. Seamless installation without this step requires Developer ID signing and notarization.
 
 Developer checks:
 

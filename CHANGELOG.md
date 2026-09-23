@@ -2,6 +2,13 @@
 
 All notable changes to IPList are documented here.
 
+## 1.4.1 — 2026-09-23
+
+### Fixed
+
+- Source refresh no longer compares saved synthetic domain cards from the Targeted list against YAML service metadata. This removes the false catalog shrink error seen after 1.4.0 (for example, 1762 saved entries versus 276 YAML services).
+- The shrink guard still rejects a genuinely incomplete YAML catalog, preserving the last verified state.
+
 ## 1.4.0 — 2026-09-20
 
 ### Added
