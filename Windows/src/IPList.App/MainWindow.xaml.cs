@@ -46,6 +46,8 @@ public partial class MainWindow : Window
         {
             if (e.PropertyName is nameof(MainViewModel.RouteCount) or nameof(MainViewModel.AddressCount))
                 Dispatcher.Invoke(() => ExportSummary.Text = $"{ModeTitle(_viewModel.Mode)} · {_viewModel.RouteCount} маршрутов · {_viewModel.AddressCount:N0} адресов");
+            if (e.PropertyName == nameof(MainViewModel.HasUnseenChanges))
+                Dispatcher.Invoke(UpdateNavigation);
             if (e.PropertyName == nameof(MainViewModel.IsBusy) && !_viewModel.IsBusy)
             {
                 Dispatcher.Invoke(() =>
@@ -175,7 +177,11 @@ public partial class MainWindow : Window
             buttons[i].Background = i == index ? new SolidColorBrush(Color.FromRgb(46, 109, 217)) : Brushes.Transparent;
             buttons[i].BorderBrush = Brushes.Transparent;
             buttons[i].FontWeight = i == index ? FontWeights.SemiBold : FontWeights.Normal;
-            System.Windows.Automation.AutomationProperties.SetHelpText(buttons[i], i == index ? "Текущий раздел" : "Открыть раздел");
+            var help = i == index ? "Текущий раздел" : "Открыть раздел";
+            if (i == 2 && _viewModel.HasUnseenChanges) help += ". Есть непросмотренные изменения";
+            System.Windows.Automation.AutomationProperties.SetHelpText(buttons[i], help);
+            System.Windows.Automation.AutomationProperties.SetName(buttons[i], i == 2 && _viewModel.HasUnseenChanges
+                ? "Изменения, есть непросмотренные события" : titles[i]);
         }
         NavHistory.ToolTip = _viewModel.HasUnseenChanges ? "Изменения — есть новые" : "Изменения";
     }
@@ -192,6 +198,9 @@ public partial class MainWindow : Window
         BrandLogo.Width = BrandLogo.Height = wide ? 94 : 82;
         BrandTitle.FontSize = wide ? 31 : 26;
         BrandTagline.FontSize = wide ? 15 : 13;
+        PageHeading.FontSize = wide ? 44 : compact ? 28 : 32;
+        PageSubtitle.FontSize = wide ? 19 : compact ? 14 : 15;
+        PageGlyph.FontSize = wide ? 38 : compact ? 26 : 30;
         var labels = new[] { NavCatalogLabel, NavManualLabel, NavHistoryLabel, NavExportLabel, NavSettingsLabel };
         foreach (var label in labels) label.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         foreach (var button in new[] { NavCatalog, NavManual, NavHistory, NavExport, NavSettings })
@@ -242,6 +251,12 @@ public partial class MainWindow : Window
     private async void ClearCategory_Click(object sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: string category }) await TryAction(() => _viewModel.SelectAllAsync(false, category));
+    }
+    private async void CategorySelection_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (sender is CheckBox { Tag: string category } check)
+            await TryAction(() => _viewModel.SelectAllAsync(check.IsChecked == true, category));
     }
     private async void ManualEnabled_Changed(object sender, RoutedEventArgs e)
     {
