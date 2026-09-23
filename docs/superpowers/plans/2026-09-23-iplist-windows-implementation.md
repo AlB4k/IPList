@@ -68,7 +68,7 @@
 - Create: `Windows/src/IPList.Core/State/AppState.cs`, `StateStore.cs`, `SelectionProfile.cs`, `ChangeRecord.cs`
 - Create: `Windows/src/IPList.Core/State/AppPersistenceCoordinator.cs`, `AutosavedExportStore.cs`
 - Create: `Windows/src/IPList.Core/Export/AmneziaJsonExporter.cs`, `AllowedIPsExporter.cs`
-- Create: `Windows/tests/IPList.Core.Tests/StateStoreTests.cs`, `AppPersistenceCoordinatorTests.cs`, `AutosavedExportStoreTests.cs`, `SelectionTests.cs`, `ExportTests.cs`, `Fixtures/legacy-state.json`
+- Create: `Windows/tests/IPList.Core.Tests/StateStoreTests.cs`, `SettingsPersistenceTests.cs`, `AppPersistenceCoordinatorTests.cs`, `AutosavedExportStoreTests.cs`, `SelectionTests.cs`, `ExportTests.cs`, `Fixtures/legacy-state.json`
 
 **Interfaces:**
 - `AppState.ExportRoutes(ExportMode)`, `SetSelection`, `ApplyProfile`, and `RecordChange` provide the single selection/export contract.
@@ -78,6 +78,7 @@
 
 - [ ] Model catalog IDs and per-mode remainder selections, manual IP/groups/notes, history (last 100), profiles, mode, source URLs, interval 1–720/manual, last-check data, freshness, notification flags, and unseen changes.
 - [ ] Add a sanitized pre-v1.4 fixture and prove backup creation precedes migration; failed decode or invalid candidate leaves original bytes and backup intact. Verify all manual data, profiles, schedule, URLs, history, and selections survive a successful migration and save/reload cycle.
+- [ ] In `SettingsPersistenceTests`, save then reload all four source URLs, interval and automatic/manual schedule, notification preference, tray/close-to-tray settings, and `hasUnseenChanges`; assert each value is unchanged.
 - [ ] Test fresh-install defaults (all services and remainders selected), deselection with shared route owners, manual-enabled toggle, profile save/apply/update, change history cap and viewed state.
 - [ ] Test Amnezia JSON records (`hostname`, empty `ip`, empty `ips`), `/32` rendering for bare IPs, semantic deduplication, covered-network removal, stable numeric order, and refusal to export an empty selection.
 - [ ] Test that the coordinator autosaves `amnezia-direct.json` after each accepted selection/mode/profile/refresh change, and is not called for a failed refresh. Inject state-write and export-write/replace failures and verify the last good state and export files remain readable and unchanged.
@@ -115,10 +116,11 @@
 - [ ] Implement the five pages in spec order—Catalog, My IP, Changes, Export, Settings—with the macOS section names/order, collapsed categories, search across name/domain/AS/IP/CIDR, per-mode service/remainder selection, freshness evidence, and clear empty/loading/error states.
 - [ ] Wire manual IP/group/note CRUD and Amnezia JSON import preview; preserve invalid-row reporting, dedupe normalization, clipboard, and manual-address exclusion from enrichment. Send every accepted state change through `AppPersistenceCoordinator` so autosaved JSON stays aligned with state.
 - [ ] Wire JSON and `AllowedIPs` export, save/copy, folder open, `.conf` single/batch wizard, peer selection, three operations, IPv6 choice, Full-mode confirmation, and outputs beside user-selected files; never overwrite input files.
-- [ ] Wire source checks, four HTTPS URLs, 1–720-hour/manual schedule, tray lifetime, close-to-tray choice, refresh exclusion, status notifications, and history viewed state. A second app instance must not start a parallel refresh for the same state.
+- [ ] Wire source checks, four HTTPS URLs, 1–720-hour/manual schedule, notification preference, tray lifetime, close-to-tray choice, refresh exclusion, and history viewed state. Route every URL, interval, notification, tray, and history-viewed change through `AppPersistenceCoordinator`; a second app instance must not start a parallel refresh for the same state.
 - [ ] Keep WPF focus and keyboard behavior native; verify page layout at 100%, 125%, and 200%, and ensure no exception or key material appears in UI/log output.
 - [ ] Create the WPF project with `dotnet new wpf -n IPList.App -o Windows/src/IPList.App`, set `TargetFramework` to `net10.0-windows` and `LangVersion` to `13.0`, reference `IPList.Core`, and add it to `Windows/IPList.Windows.sln`. This task exclusively owns `IPList.App.csproj` and embeds no duplicate copy of Core's bundled resources.
 - [ ] On Windows run: `dotnet build Windows/IPList.Windows.sln -c Release`; expected: Core, tests, and WPF app build. Run Core tests with the Task 3 command.
+- [ ] WPF persistence acceptance: change all four URLs, automatic on/off and interval, notification preference, tray and close-to-tray settings; create a history event and open Changes to mark it viewed (`hasUnseenChanges == false`); quit and relaunch, then confirm every value reloads from `state.json` and autosaved export remains aligned.
 
 ### Task 5: Add Windows CI, self-contained ZIP, documentation, and acceptance evidence
 
