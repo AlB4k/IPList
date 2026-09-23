@@ -10,18 +10,39 @@ public sealed class AppPersistenceCoordinator(StateStore stateStore, AutosavedEx
 {
     public async Task CommitAsync(AppState state, string statePath, string exportPath, byte[] exportBytes,
         CancellationToken cancellationToken = default)
+        => await CommitCoreAsync(state, statePath, exportPath, exportBytes, null, cancellationToken).ConfigureAwait(false);
+
+    public Task CommitAsync(AppState state, string statePath, string exportPath, byte[] exportBytes,
+        byte[] rawLegacyBytes, CancellationToken cancellationToken = default)
+        => CommitCoreAsync(state, statePath, exportPath, exportBytes, rawLegacyBytes, cancellationToken);
+
+    private async Task CommitCoreAsync(AppState state, string statePath, string exportPath, byte[] exportBytes,
+        byte[]? rawLegacyBytes, CancellationToken cancellationToken)
     {
         var oldState = File.Exists(statePath) ? await File.ReadAllBytesAsync(statePath, cancellationToken).ConfigureAwait(false) : null;
         var oldExport = File.Exists(exportPath) ? await File.ReadAllBytesAsync(exportPath, cancellationToken).ConfigureAwait(false) : null;
         try
         {
-            await stateStore.SaveAsync(state, statePath, cancellationToken).ConfigureAwait(false);
+            if (rawLegacyBytes is null)
+                await stateStore.SaveAsync(state, statePath, cancellationToken).ConfigureAwait(false);
+            else
+                await stateStore.SaveAsync(state, statePath, rawLegacyBytes, cancellationToken).ConfigureAwait(false);
             await exportStore.SaveAsync(exportPath, exportBytes, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
-            if (oldState is not null) await AtomicFile.WriteAsync(statePath, oldState, CancellationToken.None).ConfigureAwait(false);
-            if (oldExport is not null) await AtomicFile.WriteAsync(exportPath, oldExport, CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                if (oldState is not null) await AtomicFile.WriteAsync(statePath, oldState, CancellationToken.None).ConfigureAwait(false);
+                else if (File.Exists(statePath)) File.Delete(statePath);
+            }
+            catch { /* Preserve the original commit failure. */ }
+            try
+            {
+                if (oldExport is not null) await AtomicFile.WriteAsync(exportPath, oldExport, CancellationToken.None).ConfigureAwait(false);
+                else if (File.Exists(exportPath)) File.Delete(exportPath);
+            }
+            catch { /* Preserve the original commit failure. */ }
             throw;
         }
     }

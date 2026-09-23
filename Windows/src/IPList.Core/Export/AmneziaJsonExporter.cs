@@ -7,7 +7,12 @@ public static class AmneziaJsonExporter
 {
     public static byte[] Serialize(IEnumerable<IPv4Network> routes)
     {
-        var records = RouteSet.Normalize(routes).Select(route => new { hostname = "", ip = route.PrefixLength == 32 ? ToAddress(route.Network) : "", ips = route.PrefixLength == 32 ? Array.Empty<string>() : new[] { route.ToString() } });
+        var records = RouteSet.Normalize(routes).Select(route => new
+        {
+            hostname = route.Prefix == 32 ? ToAddress(route.Network) : route.ToString(),
+            ip = "",
+            ips = Array.Empty<string>()
+        });
         return JsonSerializer.SerializeToUtf8Bytes(records, new JsonSerializerOptions { WriteIndented = true });
     }
 
