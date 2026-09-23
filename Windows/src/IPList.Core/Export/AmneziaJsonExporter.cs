@@ -7,7 +7,9 @@ public static class AmneziaJsonExporter
 {
     public static byte[] Serialize(IEnumerable<IPv4Network> routes)
     {
-        var records = RouteSet.Normalize(routes).Select(route => new
+        var normalized = RouteSet.Normalize(routes);
+        if (normalized.Count == 0) throw new InvalidOperationException("Selected route set is empty.");
+        var records = normalized.Select(route => new
         {
             hostname = route.Prefix == 32 ? ToAddress(route.Network) : route.ToString(),
             ip = "",

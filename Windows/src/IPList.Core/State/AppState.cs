@@ -63,7 +63,8 @@ public sealed class AppState
         ArgumentException.ThrowIfNullOrWhiteSpace(serviceId);
         if (!SelectedServiceIdsByMode.TryGetValue(mode, out var ids))
         {
-            ids = SelectionInitializedByMode.GetValueOrDefault(mode) ? [] :
+            ids = SelectedServiceIds.Count > 0 ? SelectedServiceIds.ToList() :
+                SelectionInitializedByMode.GetValueOrDefault(mode) ? [] :
                 MatchedRoutesByMode.TryGetValue(mode, out var services) ? services.Keys.ToList() : [];
             SelectedServiceIdsByMode[mode] = ids;
         }
@@ -82,6 +83,7 @@ public sealed class AppState
             SelectedServiceIdsByMode[mode] = profile.SelectedServiceIds.ToList();
             SelectionInitializedByMode[mode] = true;
         }
+        if (profile.Modes.Count > 0 && !profile.Modes.Contains(Mode)) Mode = profile.Modes.Order().First();
         ManualEnabled = profile.IncludeManual;
     }
 
