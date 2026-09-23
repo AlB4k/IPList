@@ -97,15 +97,27 @@ public sealed class AppState
     public void ApplyRefresh(RefreshTransaction transaction)
     {
         var previous = MatchedRoutesByMode;
+        if (SelectedServiceIds.Count > 0)
+            foreach (var mode in transaction.MatchedCatalog.RoutesByMode.Keys)
+                if (!SelectedServiceIdsByMode.ContainsKey(mode))
+                {
+                    SelectedServiceIdsByMode[mode] = SelectedServiceIds.ToList();
+                    SelectionInitializedByMode[mode] = true;
+                }
+        var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (Catalog is not null) known.UnionWith(Catalog.Services.Select(service => service.Id));
+        known.UnionWith(LegacyServices.Select(service => service.Id));
+        known.UnionWith(SelectedServiceIds);
+        foreach (var services in previous.Values) known.UnionWith(services.Keys);
+        var hasHistoricalInventory = Catalog is not null || LegacyServices.Count > 0 || previous.Count > 0;
         if (SelectNewServices)
             foreach (var (mode, services) in transaction.MatchedCatalog.RoutesByMode)
                 if (SelectionInitializedByMode.GetValueOrDefault(mode) &&
                     SelectedServiceIdsByMode.TryGetValue(mode, out var ids))
                 {
-                    var known = previous.TryGetValue(mode, out var old) ? old.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase)
-                        : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var id in services.Keys)
-                        if (!known.Contains(id) && !ids.Contains(id, StringComparer.OrdinalIgnoreCase)) ids.Add(id);
+                    if (hasHistoricalInventory)
+                        foreach (var id in services.Keys)
+                            if (!known.Contains(id) && !ids.Contains(id, StringComparer.OrdinalIgnoreCase)) ids.Add(id);
                 }
         Catalog = transaction.MatchedCatalog.Catalog;
         MatchedRoutesByMode = transaction.MatchedCatalog.RoutesByMode.ToDictionary(

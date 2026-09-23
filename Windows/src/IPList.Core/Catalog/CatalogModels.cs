@@ -17,9 +17,9 @@ public sealed class CatalogService(
     public IReadOnlyList<string> Domains { get; } = domains;
     public IReadOnlyList<long> Asns { get; } = asns;
     public IReadOnlyList<IPv4Network> IpRanges { get; } = ipRanges;
-    public IReadOnlyList<IPv4Network> TargetedAddresses { get; internal set; } = [];
-    public IReadOnlyList<IPv4Network> LiteAddresses { get; internal set; } = [];
-    public IReadOnlyList<IPv4Network> FullAddresses { get; internal set; } = [];
+    public IReadOnlyList<IPv4Network> TargetedAddresses { get; set; } = [];
+    public IReadOnlyList<IPv4Network> LiteAddresses { get; set; } = [];
+    public IReadOnlyList<IPv4Network> FullAddresses { get; set; } = [];
 
     public static string StableId(string name, string source = DefaultSource)
     {
