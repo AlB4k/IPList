@@ -45,8 +45,12 @@ public sealed record RefreshSourceUrls(Uri Metadata, Uri Targeted, Uri Lite, Uri
         new Uri("https://raw.githubusercontent.com/lib4u/amnezia-tunneling-ru/main/amnezia-ip.json"));
 }
 
+// PreviousSourceAddressCounts are counts of unique IPv4 addresses in the last
+// accepted source set, not JSON rows or CIDR fragment counts.
 public sealed record RefreshRequest(RefreshSourceUrls Urls, ServiceCatalog? PreviousCatalog = null,
-    EnrichmentSnapshot? CachedEvidence = null, DateTimeOffset? Now = null);
+    EnrichmentSnapshot? CachedEvidence = null, DateTimeOffset? Now = null,
+    IReadOnlyDictionary<ExportMode, SourceSnapshot>? PreviousSourceSnapshots = null,
+    IReadOnlyDictionary<ExportMode, ulong>? PreviousSourceAddressCounts = null);
 
 public sealed record RefreshTransaction(MatchedCatalog MatchedCatalog, EnrichmentSnapshot Enrichment,
     IReadOnlyList<MatchDiagnostics> Diagnostics,

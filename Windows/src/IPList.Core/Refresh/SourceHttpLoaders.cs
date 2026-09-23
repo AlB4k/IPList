@@ -15,19 +15,35 @@ public sealed class AddressListHttpLoader(HttpDataClient client) : IAddressListL
         foreach (var row in document.RootElement.EnumerateArray())
         {
             if (row.ValueKind != JsonValueKind.Object) throw new FormatException("Invalid address row.");
-            var hostname = String(row, "hostname");
-            var values = new List<string> { hostname, String(row, "ip") };
+            if (!row.TryGetProperty("hostname", out var hostField) || hostField.ValueKind != JsonValueKind.String)
+                throw new FormatException("Address row hostname must be a string.");
+            var hostname = hostField.GetString()?.Trim() ?? "";
+            if (IPv4Network.TryParse(hostname, out var hostAddress)) addresses.Add(hostAddress);
+            else if (LooksLikeAddress(hostname)) throw new FormatException("Invalid hostname address.");
+            if (row.TryGetProperty("ip", out var ipField) && ipField.ValueKind != JsonValueKind.Null)
+            {
+                if (ipField.ValueKind != JsonValueKind.String) throw new FormatException("Address row ip must be a string.");
+                var text = ipField.GetString()?.Trim() ?? "";
+                if (text.Length > 0) AddAddress(text);
+            }
             if (row.TryGetProperty("ips", out var ips) && ips.ValueKind != JsonValueKind.Null)
             {
                 if (ips.ValueKind != JsonValueKind.Array) throw new FormatException("Invalid ips array.");
-                values.AddRange(ips.EnumerateArray().Select(x => x.GetString() ?? ""));
+                foreach (var item in ips.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.String) throw new FormatException("Invalid ips item type.");
+                    AddAddress(item.GetString()?.Trim() ?? "");
+                }
             }
-            foreach (var value in values)
+            if (mode == ExportMode.Targeted && IPv4Network.TryParse(hostname, out _))
+                targeted.Add(new TargetedRoute(null, hostAddress));
+
+            void AddAddress(string text)
             {
-                if (!IPv4Network.TryParse(value, out var address)) continue;
+                if (!IPv4Network.TryParse(text, out var address)) throw new FormatException("Invalid IPv4 address field.");
                 addresses.Add(address);
                 if (mode == ExportMode.Targeted)
-                    targeted.Add(new TargetedRoute(IPv4Network.TryParse(hostname, out _) || hostname.Length == 0 ? null : hostname, address));
+                    targeted.Add(new TargetedRoute(hostname.Length == 0 || IPv4Network.TryParse(hostname, out _) ? null : hostname, address));
             }
         }
         if (addresses.Count == 0) throw new FormatException("Address source is empty.");
@@ -35,6 +51,7 @@ public sealed class AddressListHttpLoader(HttpDataClient client) : IAddressListL
         return new SourceSnapshot(mode, routes, targeted.Distinct().ToArray());
     }
 
-    private static string String(JsonElement row, string name) =>
-        row.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
+    private static bool LooksLikeAddress(string value) =>
+        value.Contains('/') || value.Contains(':') || value.Any(char.IsWhiteSpace) ||
+        value.Length > 0 && value.All(c => (c >= '0' && c <= '9') || c == '.');
 }

@@ -17,8 +17,10 @@ public sealed class RefreshPipeline(
     private readonly TimeSpan _deadline = overallDeadline ?? TimeSpan.FromSeconds(60);
     private readonly CatalogMatcher _matcher = matcher ?? new CatalogMatcher();
 
-    public static RefreshPipeline Live(HttpClient httpClient) {
-        var data = new HttpDataClient(httpClient);
+    public static RefreshPipeline Live() => Live(HttpDataClient.CreateProduction());
+
+    public static RefreshPipeline Live(HttpDataClient data) {
+        ArgumentNullException.ThrowIfNull(data);
         var lists = new AddressListHttpLoader(data);
         return new RefreshPipeline(new ServiceCatalogHttpLoader(data), lists, lists, lists,
             new SystemDomainResolver(), new AsnPrefixAdapter(new RipeStatHttpLoader(data)));
@@ -57,7 +59,7 @@ public sealed class RefreshPipeline(
                 ? previousCatalog with { Freshness = CatalogFreshness.Cached }
                 : BundledCatalog.Load();
         }
-        if (request.PreviousCatalog is { } previous && catalog.Services.Count < Math.Ceiling(previous.Services.Count * 0.7))
+        if (request.PreviousCatalog is { } previous && catalog.Services.Count < Math.Ceiling(previous.Services.Count * 0.5))
             throw new InvalidOperationException("Suspicious catalog shrink; previous state retained.");
         if (catalog.Services.Count == 0) throw new InvalidOperationException("Catalog is empty.");
         checks.Add(new MatchDiagnostics("metadata", "ok", $"{catalog.Services.Count} services"));
@@ -67,6 +69,7 @@ public sealed class RefreshPipeline(
             [ExportMode.Lite] = await liteTask.ConfigureAwait(false),
             [ExportMode.Full] = await fullTask.ConfigureAwait(false)
         };
+        ValidateSourceShrink(request, sources);
         foreach (var mode in Enum.GetValues<ExportMode>())
             checks.Add(new MatchDiagnostics(mode.ToString().ToLowerInvariant(), "ok", $"{sources[mode].Routes.Count} routes"));
         var now = request.Now ?? DateTimeOffset.UtcNow;
@@ -77,6 +80,32 @@ public sealed class RefreshPipeline(
         checks.Add(new MatchDiagnostics("matching", "ok", "Source unions verified"));
         return new RefreshTransaction(matched, refreshed, checks, sources, now);
     }
+
+    private static void ValidateSourceShrink(RefreshRequest request,
+        IReadOnlyDictionary<ExportMode, SourceSnapshot> sources)
+    {
+        foreach (var mode in Enum.GetValues<ExportMode>())
+        {
+            ulong previousCount = 0;
+            if (request.PreviousSourceSnapshots?.TryGetValue(mode, out var previous) == true)
+            {
+                if (previous.Mode != mode) throw new InvalidOperationException("Previous source snapshot mode mismatch.");
+                previousCount = AddressCount(previous.Routes);
+            }
+            if (request.PreviousSourceAddressCounts?.TryGetValue(mode, out var count) == true)
+                previousCount = Math.Max(previousCount, count);
+            if (previousCount > (1UL << 32)) throw new InvalidOperationException("Invalid previous IPv4 address count.");
+            if (previousCount == 0) continue;
+            var currentCount = AddressCount(sources[mode].Routes);
+            // Match the Swift catalog's 50% shrink guard. Address coverage
+            // avoids false alarms when equivalent CIDRs are split or collapsed.
+            if (currentCount < (previousCount + 1) / 2)
+                throw new InvalidOperationException($"Suspicious {mode} source shrink; previous state retained.");
+        }
+    }
+
+    private static ulong AddressCount(IEnumerable<IPv4Network> routes) =>
+        RouteSet.Normalize(routes).Aggregate(0UL, (total, route) => checked(total + route.AddressCount));
 
     private async Task<EnrichmentSnapshot> EnrichAsync(ServiceCatalog catalog, EnrichmentSnapshot cache,
         DateTimeOffset now, List<MatchDiagnostics> checks, bool usingBundledSnapshot,

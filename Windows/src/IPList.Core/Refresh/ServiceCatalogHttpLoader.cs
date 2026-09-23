@@ -16,7 +16,7 @@ public sealed class ServiceCatalogHttpLoader(HttpDataClient client) : IServiceCa
         try
         {
             var catalog = await LoadAsync(uri, cancellationToken).ConfigureAwait(false);
-            if (previous is not null && catalog.Services.Count < Math.Ceiling(previous.Services.Count * 0.7))
+            if (previous is not null && catalog.Services.Count < Math.Ceiling(previous.Services.Count * 0.5))
                 throw new FormatException("Suspicious catalog shrink.");
             return catalog;
         }

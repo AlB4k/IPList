@@ -79,6 +79,44 @@ public sealed class RefreshPipelineTests
         Assert.Equal(EnrichmentFreshness.Stale, candidate.Enrichment.Services["a"].Freshness);
     }
 
+    [Theory]
+    [InlineData(ExportMode.Targeted, false)]
+    [InlineData(ExportMode.Lite, false)]
+    [InlineData(ExportMode.Full, false)]
+    [InlineData(ExportMode.Targeted, true)]
+    [InlineData(ExportMode.Lite, true)]
+    [InlineData(ExportMode.Full, true)]
+    public async Task SuspiciousSourceAddressShrinkRejectsCandidateWithoutMutation(ExportMode shrinkingMode, bool useCountBaseline)
+    {
+        var prior = Catalog("a.example");
+        var previous = new Dictionary<ExportMode, SourceSnapshot>
+        {
+            [shrinkingMode] = new(shrinkingMode, [IPv4Network.Parse("198.51.100.0/29")], [])
+        };
+        var loader = new SmallSourceLoader(shrinkingMode);
+        var request = new RefreshRequest(RefreshSourceUrls.Default, prior,
+            PreviousSourceSnapshots: useCountBaseline ? null : previous,
+            PreviousSourceAddressCounts: useCountBaseline ? new Dictionary<ExportMode, ulong> { [shrinkingMode] = 8 } : null);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Pipeline(prior, loader, new StubDns(), new StubAsn())
+            .RunAsync(request, CancellationToken.None));
+        Assert.Empty(prior.Services.Single().LiteAddresses);
+    }
+
+    [Fact]
+    public async Task EquivalentSourceAddressCoverageDoesNotTriggerShrink()
+    {
+        var prior = Catalog("a.example");
+        var previous = new Dictionary<ExportMode, SourceSnapshot>
+        {
+            [ExportMode.Lite] = new(ExportMode.Lite,
+                [IPv4Network.Parse("198.51.100.0/25"), IPv4Network.Parse("198.51.100.128/25")], [])
+        };
+        var candidate = await Pipeline(prior, new StubAddressLoader(), new StubDns(), new StubAsn())
+            .RunAsync(new RefreshRequest(RefreshSourceUrls.Default, prior,
+                PreviousSourceSnapshots: previous), CancellationToken.None);
+        Assert.True(candidate.SourceSnapshots.ContainsKey(ExportMode.Lite));
+    }
+
     private static RefreshPipeline Pipeline(ServiceCatalog catalog, IAddressListLoader lists, IDomainResolver dns,
         IAsnPrefixLoader asn, TimeSpan? deadline = null) => new(new StubCatalogLoader(catalog), lists, lists, lists, dns, asn,
             deadline ?? TimeSpan.FromSeconds(60));
@@ -100,6 +138,18 @@ public sealed class RefreshPipelineTests
             IReadOnlyList<IPv4Network> routes = mode == ExportMode.Targeted ? [IPv4Network.Parse("198.51.100.1")] : [IPv4Network.Parse("198.51.100.0/24")];
             return new SourceSnapshot(mode, routes, mode == ExportMode.Targeted
                 ? [new TargetedRoute("a.example", IPv4Network.Parse("198.51.100.1"))] : []);
+        }
+    }
+
+    private sealed class SmallSourceLoader(ExportMode smallMode) : IAddressListLoader
+    {
+        public Task<SourceSnapshot> LoadAsync(Uri uri, ExportMode mode, CancellationToken cancellationToken)
+        {
+            IReadOnlyList<IPv4Network> routes = mode == smallMode
+                ? [IPv4Network.Parse("198.51.100.1/32")]
+                : [IPv4Network.Parse("198.51.100.0/24")];
+            return Task.FromResult(new SourceSnapshot(mode, routes,
+                mode == ExportMode.Targeted ? [new TargetedRoute("a.example", routes[0])] : []));
         }
     }
 
