@@ -9,8 +9,10 @@
     <LangVersion>13.0</LangVersion>
     <RootNamespace>IPList.Windows</RootNamespace>
     <AssemblyName>IPList</AssemblyName>
+    <ApplicationIcon>Assets/AppIcon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <Resource Include="Assets/AppIcon.png" />
     <ProjectReference Include="../IPList.Core/IPList.Core.csproj" />
   </ItemGroup>
 </Project>
