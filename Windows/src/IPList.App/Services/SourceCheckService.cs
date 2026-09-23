@@ -2,32 +2,22 @@ using System.Diagnostics;
 using System.Text.Json;
 using IPList.Core.Catalog;
 using IPList.Core.Networking;
+using IPList.Core.Refresh;
 
 namespace IPList.Windows.Services;
 
 public sealed class SourceCheckService
 {
-    private static readonly HttpClient Client = new() { Timeout = TimeSpan.FromSeconds(12) };
+    private static readonly HttpDataClient Client = HttpDataClient.CreateProduction();
 
     public async Task<string> CheckAsync(string name, Uri uri, bool metadata, CancellationToken cancellationToken)
     {
         var watch = Stopwatch.StartNew();
         try
         {
-            using var response = await Client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            if (!response.IsSuccessStatusCode)
-                return $"{name}: HTTP {(int)response.StatusCode}, {watch.ElapsedMilliseconds} мс, источник недоступен";
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var bytes = new MemoryStream();
-            var buffer = new byte[32 * 1024];
-            int read;
-            while ((read = await stream.ReadAsync(buffer, cancellationToken)) > 0)
-            {
-                if (bytes.Length + read > 4 * 1024 * 1024) throw new FormatException();
-                bytes.Write(buffer, 0, read);
-            }
-            var count = metadata ? ServiceCatalogParser.Parse(bytes.ToArray()).Services.Count : CountAddresses(bytes.ToArray());
-            return $"{name}: HTTP {(int)response.StatusCode}, {watch.ElapsedMilliseconds} мс, {count} записей";
+            var bytes = await Client.GetLimitedAsync(uri, cancellationToken);
+            var count = metadata ? ServiceCatalogParser.Parse(bytes).Services.Count : CountAddresses(bytes);
+            return $"{name}: HTTPS OK, {watch.ElapsedMilliseconds} мс, {count} записей";
         }
         catch (OperationCanceledException) { return $"{name}: время ожидания истекло"; }
         catch (HttpRequestException) { return $"{name}: HTTP/сетевая ошибка"; }

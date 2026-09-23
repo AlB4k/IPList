@@ -47,7 +47,7 @@ public sealed class AmneziaConfigDocumentTests
     [Fact]
     public void InsertsAllowedIPsWhenAbsentAndPreservesUtf8Bom()
     {
-        var source = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes("[Peer]\r\nPublicKey = fake\r\nEndpoint = 192.0.2.1:1\r\n")).ToArray();
+        var source = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes("[Interface]\r\nPrivateKey = fake\r\nAddress = 10.0.0.2/32\r\n[Peer]\r\nPublicKey = fake\r\nEndpoint = 192.0.2.1:1\r\n")).ToArray();
         var output = AmneziaConfigDocument.Parse(source).Render(0, AllowedIPsOperation.Replace,
             [IPv4Network.Parse("192.0.2.4")]);
 

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Windows.Input;
 using IPList.Core.Catalog;
 using IPList.Core.Export;
@@ -241,7 +242,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         name = name.Trim();
         if (name.Length is 0 or > 80) throw new ArgumentException("Имя профиля: от 1 до 80 символов.");
         await MutateAsync(() => _state.Profiles[name] = new SelectionProfile(name,
-            CurrentSelectedIds().ToHashSet(), new HashSet<ExportMode> { _state.Mode }, _state.ManualEnabled));
+            CurrentSelectedIds().ToHashSet(), new HashSet<ExportMode> { _state.Mode }, _state.ManualEnabled,
+            _state.RemaindersSelectedByMode.TryGetValue(_state.Mode, out var includeRemainder)
+                ? includeRemainder : _state.SelectNewRemainders));
         SignalAll();
     }
 

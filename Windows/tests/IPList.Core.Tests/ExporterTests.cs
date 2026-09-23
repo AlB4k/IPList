@@ -31,7 +31,7 @@ public sealed class ExporterTests
         var items = json.RootElement.EnumerateArray().ToArray();
 
         Assert.Equal(2, items.Length);
-        Assert.Equal("192.0.2.7/32", items[0].GetProperty("hostname").GetString());
+        Assert.Equal("192.0.2.7", items[0].GetProperty("hostname").GetString());
         Assert.Equal("", items[0].GetProperty("ip").GetString());
         Assert.Empty(items[0].GetProperty("ips").EnumerateArray());
         Assert.Equal("198.51.100.0/24", items[1].GetProperty("hostname").GetString());

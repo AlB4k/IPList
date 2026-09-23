@@ -17,19 +17,24 @@ jobs:
       - name: Test Core
         run: dotnet test Windows/tests/IPList.Core.Tests/IPList.Core.Tests.csproj -c Release --no-build
       - name: Publish self-contained app
-        run: dotnet publish Windows/src/IPList.App/IPList.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/publish
+        run: dotnet publish Windows/src/IPList.App/IPList.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o artifacts/publish
       - name: Verify and package
         shell: pwsh
         run: |
-          if (!(Test-Path artifacts/publish/IPList.exe)) { throw 'IPList.exe missing' }
+          if (!(Test-Path artifacts/publish/IPList.exe -PathType Leaf)) { throw 'IPList.exe missing' }
+          if ((Get-Item artifacts/publish/IPList.exe).Length -eq 0) { throw 'IPList.exe is empty' }
           $forbiddenExtensions = @('.vpn', '.conf', '.key', '.pem', '.p12', '.pfx')
           $forbiddenFiles = Get-ChildItem artifacts/publish -Recurse -File | Where-Object { $forbiddenExtensions -contains $_.Extension.ToLowerInvariant() }
           if ($forbiddenFiles) { throw "Personal config or key material found in publish output: $($forbiddenFiles.FullName -join ', ')" }
           if (Get-ChildItem artifacts/publish -Recurse -Directory | Where-Object { $_.Name -eq 'Fixtures' }) { throw 'Test fixtures found in publish output' }
+          $rawResources = @('pincetgore-config.yaml', 'iplist-service-overrides.json', 'enrichment-snapshot.json')
+          if (Get-ChildItem artifacts/publish -Recurse -File | Where-Object { $rawResources -contains $_.Name }) { throw 'Bundled resources must remain embedded' }
           Copy-Item Windows/README.md artifacts/publish/README.md
           Copy-Item Windows/THIRD_PARTY_NOTICES.md artifacts/publish/THIRD_PARTY_NOTICES.md
           Compress-Archive -Path artifacts/publish/* -DestinationPath IPList-1.4.0-windows-x64.zip
-          (Get-FileHash IPList-1.4.0-windows-x64.zip -Algorithm SHA256).Hash | Out-File SHA256SUMS.txt
+          $archive = 'IPList-1.4.0-windows-x64.zip'
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash *$archive" | Set-Content SHA256SUMS.txt -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
           name: IPList-1.4.0-windows-x64

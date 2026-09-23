@@ -5,9 +5,10 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <ImplicitUsings>disable</ImplicitUsings>
     <LangVersion>13.0</LangVersion>
     <RootNamespace>IPList.Windows</RootNamespace>
+    <AssemblyName>IPList</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../IPList.Core/IPList.Core.csproj" />

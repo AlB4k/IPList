@@ -305,9 +305,23 @@ public partial class MainWindow : Window
             var written = new List<string>();
             try
             {
-                foreach (var output in outputs) { await using var stream = new FileStream(output.Path, FileMode.CreateNew, FileAccess.Write); await stream.WriteAsync(output.Bytes); written.Add(output.Path); }
+                foreach (var output in outputs)
+                {
+                    await using var stream = new FileStream(output.Path, FileMode.CreateNew, FileAccess.Write);
+                    written.Add(output.Path);
+                    await stream.WriteAsync(output.Bytes);
+                }
             }
-            catch { foreach (var path in written) File.Delete(path); throw; }
+            catch
+            {
+                foreach (var path in written)
+                {
+                    try { File.Delete(path); }
+                    catch (IOException) { /* Continue rolling back the remaining files. */ }
+                    catch (UnauthorizedAccessException) { /* Continue rolling back the remaining files. */ }
+                }
+                throw;
+            }
             MessageBox.Show(this, $"Создано файлов: {written.Count}. Исходные файлы не изменены.", "IPList");
         }
         catch { Alert("Не удалось создать .conf. Проверьте структуру, peer, маршруты и права на папку. Исходные файлы не изменены."); }
