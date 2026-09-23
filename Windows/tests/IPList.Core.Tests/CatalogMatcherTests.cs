@@ -16,7 +16,7 @@ public sealed class CatalogMatcherTests
         Assert.Equal(matched.Routes("a", ExportMode.Lite), matched.Routes("b", ExportMode.Lite));
         var ownedPlusRemainder = matched.Routes("a", ExportMode.Lite).Concat(matched.Routes("b", ExportMode.Lite)).Concat(matched.UnassignedRoutes[ExportMode.Lite]);
         Assert.True(RouteSet.UnionEquals([source], ownedPlusRemainder));
-        Assert.False(matched.UnassignedRoutes[ExportMode.Lite].Any(x => x.Intersects(IPv4Network.Parse("198.51.100.16/28"))));
+        Assert.DoesNotContain(matched.UnassignedRoutes[ExportMode.Lite], x => x.Intersects(IPv4Network.Parse("198.51.100.16/28")));
     }
 
     [Fact]

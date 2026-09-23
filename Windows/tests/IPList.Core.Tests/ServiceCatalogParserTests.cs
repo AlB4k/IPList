@@ -10,7 +10,7 @@ public sealed class ServiceCatalogParserTests
     {
         var fixture = Path.Combine(AppContext.BaseDirectory, "Fixtures", "catalog.yaml");
         var catalog = ServiceCatalogParser.Parse(Encoding.UTF8.GetBytes(File.ReadAllText(fixture)));
-        var aeroflot = Assert.Single(catalog.Services.Where(x => x.Name == "Аэрофлот"));
+        var aeroflot = Assert.Single(catalog.Services, x => x.Name == "Аэрофлот");
         Assert.Equal("Транспорт, авто и каршеринг", aeroflot.Category);
         Assert.Contains("aeroflot.ru", aeroflot.Domains);
         Assert.Contains("api.aeroflot.ru", aeroflot.Domains);
@@ -49,7 +49,7 @@ public sealed class ServiceCatalogParserTests
     {
         var catalog = BundledCatalog.Load();
         Assert.True(catalog.Services.Count > 200);
-        var oneC = Assert.Single(catalog.Services.Where(x => x.Id == "iplist:1c"));
+        var oneC = Assert.Single(catalog.Services, x => x.Id == "iplist:1c");
         Assert.Contains("1c.ru", oneC.Domains);
         Assert.DoesNotContain(catalog.Services.Where(x => x.Id != "iplist:1c"), x => x.Domains.Contains("1c.ru"));
         var snapshot = BundledCatalog.LoadEvidence();
