@@ -1,0 +1,34 @@
+name: Windows
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build solution
+        run: dotnet build Windows/IPList.Windows.sln -c Release
+      - name: Test Core
+        run: dotnet test Windows/tests/IPList.Core.Tests/IPList.Core.Tests.csproj -c Release --no-build
+      - name: Publish self-contained app
+        run: dotnet publish Windows/src/IPList.App/IPList.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/publish
+      - name: Verify and package
+        shell: pwsh
+        run: |
+          if (!(Test-Path artifacts/publish/IPList.exe)) { throw 'IPList.exe missing' }
+          if (Get-ChildItem artifacts/publish -Recurse -Include *.vpn,*.conf,*.key) { throw 'Sensitive files in artifact' }
+          Copy-Item Windows/README.md artifacts/publish/README.md
+          Compress-Archive -Path artifacts/publish/* -DestinationPath IPList-1.4.0-windows-x64.zip
+          (Get-FileHash IPList-1.4.0-windows-x64.zip -Algorithm SHA256).Hash | Out-File SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IPList-1.4.0-windows-x64
+          path: |
+            IPList-1.4.0-windows-x64.zip
+            SHA256SUMS.txt
