@@ -50,4 +50,6 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload v1.5.0 IPList-1.5.0-windows-x64.zip SHA256SUMS.txt --clobber --repo $env:GITHUB_REPOSITORY
+        run: |
+          gh release create v1.5.0-windows --target $env:GITHUB_REF_NAME --title 'IPList 1.5.0 for Windows' --notes 'Windows 1.5.0: self-contained WPF build with safe export validation, per-entry My IP selection, update checking, light theme, and a 500-route safety limit.' --repo $env:GITHUB_REPOSITORY
+          gh release upload v1.5.0-windows IPList-1.5.0-windows-x64.zip SHA256SUMS.txt --clobber --repo $env:GITHUB_REPOSITORY
