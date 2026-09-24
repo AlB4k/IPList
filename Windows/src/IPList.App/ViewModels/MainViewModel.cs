@@ -11,6 +11,8 @@ using IPList.Core.State;
 
 namespace IPList.Windows.ViewModels;
 
+public enum ExportTarget { Windows, MacOS }
+
 public sealed class ServiceRow : INotifyPropertyChanged
 {
     private bool _selected;
@@ -29,6 +31,7 @@ public sealed class ManualRow
     public required string Value { get; init; }
     public string Group { get; init; } = "";
     public string Note { get; init; } = "";
+    public bool IsIncludedInExport { get; init; }
 }
 
 public sealed class MainViewModel : INotifyPropertyChanged
@@ -72,6 +75,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsLoaded => _isLoaded;
     public string Search { get => _search; set { Set(ref _search, value); RebuildServices(); } }
     public ExportMode Mode => _state.Mode;
+    public ExportTarget ExportTarget { get; set; } = ExportTarget.Windows;
     public bool HasActiveCatalog => _state.Catalog is not null;
     public string Freshness => _state.Catalog is null ? "Каталог ещё не проверен" :
         $"Каталог: {_state.Catalog.Freshness}; данные: {(_state.Evidence?.Services.Values.Any(x => x.Freshness == EnrichmentFreshness.Stale) == true ? "устаревшие" : "доступны")}; {_state.LastSuccessfulRefreshAt?.LocalDateTime:g}";
@@ -195,6 +199,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         await MutateAsync(() => _state.ManualEnabled = enabled);
         RebuildExport();
     }
+    public async Task SetManualIncludedAsync(string value, bool included)
+    {
+        await MutateAsync(() =>
+        {
+            var index = _state.ManualRoutes.FindIndex(x => x.Value == value);
+            if (index >= 0) _state.ManualRoutes[index] = _state.ManualRoutes[index] with { IsIncludedInExport = included };
+        });
+        RebuildManual(); RebuildExport();
+    }
 
     public async Task<(int Added, IReadOnlyList<string> Invalid)> AddManualAsync(string input, string group, string note)
     {
@@ -287,6 +300,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         var routes = ExportRoutes();
         if (routes.Count == 0) throw new InvalidOperationException("Нет выбранных маршрутов для выгрузки.");
+        if (ExportTarget == ExportTarget.Windows && routes.Count > 500)
+            throw new InvalidOperationException($"Выгрузка для Windows остановлена: {routes.Count} маршрутов. Максимум 500; выберите Lite или уменьшите выбор сервисов.");
         return routes;
     }
 
@@ -385,7 +400,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void RebuildManual()
     {
         ManualRoutes.Clear();
-        foreach (var route in _state.ManualRoutes) ManualRoutes.Add(new ManualRow { Value = route.Value, Group = route.Group ?? "", Note = route.Note ?? "" });
+        foreach (var route in _state.ManualRoutes) ManualRoutes.Add(new ManualRow { Value = route.Value, Group = route.Group ?? "", Note = route.Note ?? "", IsIncludedInExport = route.IsIncludedInExport });
     }
     private void RebuildHistory()
     {

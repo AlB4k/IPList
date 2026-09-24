@@ -45,7 +45,7 @@ public partial class MainWindow : Window
         _viewModel.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName is nameof(MainViewModel.RouteCount) or nameof(MainViewModel.AddressCount))
-                Dispatcher.Invoke(() => ExportSummary.Text = $"{ModeTitle(_viewModel.Mode)} · {_viewModel.RouteCount} маршрутов · {_viewModel.AddressCount:N0} адресов");
+                Dispatcher.Invoke(UpdateExportSummary);
             if (e.PropertyName == nameof(MainViewModel.HasUnseenChanges))
                 Dispatcher.Invoke(UpdateNavigation);
             if (e.PropertyName == nameof(MainViewModel.IsBusy) && !_viewModel.IsBusy)
@@ -90,7 +90,7 @@ public partial class MainWindow : Window
                 ? remainder : _viewModel.State.SelectNewRemainders;
             ManualEnabledCheck.IsChecked = _viewModel.State.ManualEnabled;
             ExportManualCheck.IsChecked = _viewModel.State.ManualEnabled;
-            ExportSummary.Text = $"{ModeTitle(_viewModel.Mode)} · {_viewModel.RouteCount} маршрутов · {_viewModel.AddressCount:N0} адресов";
+            UpdateExportSummary();
             LastCheckText.Text = "Последняя проверка: " + _viewModel.LastCheck;
             var selectedProfile = ProfileList.SelectedItem as string;
             ProfileList.ItemsSource = _viewModel.State.Profiles.Keys.OrderBy(x => x).ToArray();
@@ -106,6 +106,15 @@ public partial class MainWindow : Window
         }
         finally { _syncing = false; }
         UpdateNavigation();
+    }
+
+    private void UpdateExportSummary()
+    {
+        var count = _viewModel.RouteCount;
+        var blocked = _viewModel.ExportTarget == ExportTarget.Windows && count > 500;
+        ExportSummary.Text = $"{ModeTitle(_viewModel.Mode)} · {_viewModel.ExportTarget} · Будет выгружено: {count} маршрутов · {_viewModel.AddressCount:N0} адресов" +
+            (blocked ? " · ПРЕВЫШЕН ЛИМИТ WINDOWS (500)" : count > 400 ? " · близко к лимиту" : " · допустимо");
+        ExportSummary.Foreground = blocked ? System.Windows.Media.Brushes.Red : count > 400 ? System.Windows.Media.Brushes.DarkOrange : System.Windows.Media.Brushes.DarkGreen;
     }
 
     private void SyncSettingsForm()
@@ -297,6 +306,11 @@ public partial class MainWindow : Window
     {
         if (ManualGrid.SelectedItem is ManualRow row) { ManualGroup.Text = row.Group; ManualNote.Text = row.Note; }
     }
+    private async void ManualIncluded_Changed(object sender, RoutedEventArgs e)
+    {
+        if (sender is CheckBox check && check.DataContext is ManualRow row && check.IsInitialized)
+            await TryAction(() => _viewModel.SetManualIncludedAsync(row.Value, check.IsChecked == true));
+    }
     private async void ImportJson_Click(object sender, RoutedEventArgs e)
     {
         var path = _files.OpenJson().FirstOrDefault();
@@ -344,8 +358,13 @@ public partial class MainWindow : Window
     }
     private void SaveJson_Click(object sender, RoutedEventArgs e)
     {
-        try { if (!ConfirmFullFileExport()) return; var bytes = _viewModel.ExportJson(); var path = _files.Save("JSON|*.json", "amnezia-direct.json"); if (path is not null) File.WriteAllBytes(path, bytes); }
+            try { if (!ConfirmFullFileExport()) return; var bytes = _viewModel.ExportJson(); var path = _files.Save("JSON|*.json", $"amnezia-{_viewModel.Mode}-{_viewModel.ExportTarget}.json"); if (path is not null) File.WriteAllBytes(path, bytes); }
         catch (Exception ex) { Alert(MainViewModel.SafeError(ex)); }
+    }
+    private void ExportTarget_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (ExportTargetBox.SelectedValue is string value && Enum.TryParse<ExportTarget>(value, out var target))
+        { _viewModel.ExportTarget = target; UpdateExportSummary(); }
     }
     private void CopyAllowed_Click(object sender, RoutedEventArgs e)
     {

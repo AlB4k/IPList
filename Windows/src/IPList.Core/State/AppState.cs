@@ -4,7 +4,7 @@ using IPList.Core.Refresh;
 
 namespace IPList.Core.State;
 
-public sealed record ManualRoute(string Value, string? Group = null, string? Note = null);
+public sealed record ManualRoute(string Value, string? Group = null, string? Note = null, bool IsIncludedInExport = true);
 public sealed record SelectionProfile(string Name, HashSet<string> SelectedServiceIds,
     HashSet<ExportMode> Modes, bool IncludeManual, bool? IncludeRemainders = null);
 
@@ -53,7 +53,7 @@ public sealed class AppState
             (!RemaindersSelectedByMode.TryGetValue(mode, out var include) ? SelectNewRemainders : include)) routes.AddRange(remainder);
         if (ManualEnabled)
             foreach (var manual in ManualRoutes)
-                if (IPv4Network.TryParse(manual.Value, out var route)) routes.Add(route);
+                if (manual.IsIncludedInExport && IPv4Network.TryParse(manual.Value, out var route)) routes.Add(route);
                 else throw new FormatException("Invalid saved manual IPv4 route.");
         return RouteSet.Normalize(routes);
     }

@@ -9,7 +9,7 @@
     <LangVersion>13.0</LangVersion>
     <RootNamespace>IPList.Windows</RootNamespace>
     <AssemblyName>IPList</AssemblyName>
-    <Version>1.4.0</Version>
+    <Version>1.5.0</Version>
     <ApplicationIcon>Assets/AppIcon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>

@@ -31,13 +31,13 @@ jobs:
           if (Get-ChildItem artifacts/publish -Recurse -File | Where-Object { $rawResources -contains $_.Name }) { throw 'Bundled resources must remain embedded' }
           Copy-Item Windows/README.md artifacts/publish/README.md
           Copy-Item Windows/THIRD_PARTY_NOTICES.md artifacts/publish/THIRD_PARTY_NOTICES.md
-          Compress-Archive -Path artifacts/publish/* -DestinationPath IPList-1.4.0-windows-x64.zip
-          $archive = 'IPList-1.4.0-windows-x64.zip'
+          Compress-Archive -Path artifacts/publish/* -DestinationPath IPList-1.5.0-windows-x64.zip
+          $archive = 'IPList-1.5.0-windows-x64.zip'
           $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash *$archive" | Set-Content SHA256SUMS.txt -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
           name: IPList-1.4.0-windows-x64
           path: |
-            IPList-1.4.0-windows-x64.zip
+            IPList-1.5.0-windows-x64.zip
             SHA256SUMS.txt
