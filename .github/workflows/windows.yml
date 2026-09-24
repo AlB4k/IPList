@@ -3,6 +3,10 @@ name: Windows
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -41,3 +45,9 @@ jobs:
           path: |
             IPList-1.5.0-windows-x64.zip
             SHA256SUMS.txt
+      - name: Upload 1.5.0 release assets
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload v1.5.0 IPList-1.5.0-windows-x64.zip SHA256SUMS.txt --clobber --repo $env:GITHUB_REPOSITORY
