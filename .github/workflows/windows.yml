@@ -37,7 +37,7 @@ jobs:
           "$hash *$archive" | Set-Content SHA256SUMS.txt -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
-          name: IPList-1.4.0-windows-x64
+          name: IPList-1.5.0-windows-x64
           path: |
             IPList-1.5.0-windows-x64.zip
             SHA256SUMS.txt
