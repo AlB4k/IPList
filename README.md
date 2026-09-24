@@ -11,6 +11,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
   <img alt="macOS 13+" src="https://img.shields.io/badge/macOS-13%2B-blue">
+  <img alt="Windows 10/11" src="https://img.shields.io/badge/Windows-10%2F11-0078D4">
   <img alt="Swift" src="https://img.shields.io/badge/Swift-5.9-orange">
 </p>
 
@@ -18,9 +19,16 @@
 
 ## Русский
 
-**IPList 1.4.1** — нативное приложение для macOS 13+, которое собирает и поддерживает список IPv4/CIDR для раздельного туннелирования AmneziaVPN и AmneziaWG. Оно показывает обновляемый каталог российских сервисов, помогает выбрать нужные маршруты и создаёт JSON для AmneziaVPN либо строку `AllowedIPs` и отдельные копии `.conf` для AmneziaWG.
+**IPList 1.5.0** — приложение для macOS 13+ и Windows 10/11, которое собирает и поддерживает список IPv4/CIDR для раздельного туннелирования AmneziaVPN. Оно показывает обновляемый каталог российских сервисов, помогает выбрать нужные маршруты и формирует безопасные файлы выгрузки для выбранной платформы.
 
-[Скачать рекомендуемую версию 1.4.1](https://github.com/AlB4k/IPList/releases/download/v1.4.1/IPList-1.4.1.dmg). Обновление исправляет ложное сообщение об уменьшении каталога при проверке источников после 1.4.0; сохранённые данные остаются на месте.
+### Скачать IPList 1.5.0
+
+- [macOS — ZIP](https://github.com/AlB4k/IPList/releases/download/v1.5.0/IPList-1.5.0-macOS.zip) · [релиз и SHA-256](https://github.com/AlB4k/IPList/releases/tag/v1.5.0)
+- [Windows — ZIP x64](https://github.com/AlB4k/IPList/releases/download/v1.5.0-windows-2/IPList-1.5.0-windows-x64.zip) · [релиз и SHA-256](https://github.com/AlB4k/IPList/releases/tag/v1.5.0-windows-2)
+
+GitHub сделал опубликованный релиз immutable, поэтому macOS и Windows 1.5.0 находятся в двух соседних релизах. Это два официальных артефакта одной версии, а не разные версии приложения.
+
+В 1.5.0 добавлены проверка обновлений из GitHub Releases, принудительно читаемая светлая тема, выбор отдельных записей «Мои IP», переключатель назначения выгрузки macOS/Windows, проверка IPv4/CIDR и защитный лимит Windows в 500 маршрутов.
 
 ### Каталог, источники и выбор
 
@@ -102,9 +110,16 @@ IPLIST_LIVE_TEST=1 ./scripts/test.sh
 
 ## English
 
-**IPList 1.4.1** is a native macOS 13+ app that builds and maintains IPv4/CIDR lists for AmneziaVPN and AmneziaWG split tunneling. It presents an updatable Russian-service catalog, lets you select routes, and creates either AmneziaVPN JSON or an `AllowedIPs` line and separate AmneziaWG `.conf` outputs.
+**IPList 1.5.0** is an app for macOS 13+ and Windows 10/11 that builds and maintains IPv4/CIDR lists for AmneziaVPN split tunneling. It presents an updatable Russian-service catalog, lets you select routes, and creates platform-specific validated export files.
 
-[Download the recommended 1.4.1 release](https://github.com/AlB4k/IPList/releases/download/v1.4.1/IPList-1.4.1.dmg). This update fixes a false catalog shrink warning during source checks after 1.4.0; existing data is preserved.
+### Download IPList 1.5.0
+
+- [macOS — ZIP](https://github.com/AlB4k/IPList/releases/download/v1.5.0/IPList-1.5.0-macOS.zip) · [release and SHA-256](https://github.com/AlB4k/IPList/releases/tag/v1.5.0)
+- [Windows — x64 ZIP](https://github.com/AlB4k/IPList/releases/download/v1.5.0-windows-2/IPList-1.5.0-windows-x64.zip) · [release and SHA-256](https://github.com/AlB4k/IPList/releases/tag/v1.5.0-windows-2)
+
+GitHub made the published release immutable, so the macOS and Windows 1.5.0 artifacts are hosted in two adjacent releases. They are official artifacts of the same application version, not different application versions.
+
+Version 1.5.0 adds GitHub Releases update checks, a consistently readable light theme, per-entry “My IP” selection, a macOS/Windows export target switch, IPv4/CIDR validation, and a 500-route Windows safety limit.
 
 ### Catalog, sources, and selection
 
