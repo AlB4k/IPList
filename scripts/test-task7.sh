@@ -11,6 +11,7 @@ swiftc -parse-as-library -D TASK7_CHECKS \
   Sources/IPList/AmneziaWGConfig.swift \
   Sources/IPList/Core.swift \
   Sources/IPList/App.swift \
+  Sources/IPList/AppUpdateChecker.swift \
   Tests/Task7Checks.swift \
   -o .build/checks/task7-checks
 .build/checks/task7-checks

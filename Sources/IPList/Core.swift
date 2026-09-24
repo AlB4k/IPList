@@ -120,14 +120,16 @@ struct ManualEntry: Codable, Identifiable, Equatable {
     var address: String
     var groupID: UUID?
     var note: String = ""
+    var isIncludedInExport: Bool = true
 
-    private enum CodingKeys: String, CodingKey { case id, address, groupID, note }
+    private enum CodingKeys: String, CodingKey { case id, address, groupID, note, isIncludedInExport }
 
-    init(id: UUID = UUID(), address: String, groupID: UUID? = nil, note: String = "") {
+    init(id: UUID = UUID(), address: String, groupID: UUID? = nil, note: String = "", isIncludedInExport: Bool = true) {
         self.id = id
         self.address = address
         self.groupID = groupID
         self.note = note
+        self.isIncludedInExport = isIncludedInExport
     }
 
     init(from decoder: Decoder) throws {
@@ -136,7 +138,8 @@ struct ManualEntry: Codable, Identifiable, Equatable {
             id: try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
             address: try c.decode(String.self, forKey: .address),
             groupID: try c.decodeIfPresent(UUID.self, forKey: .groupID),
-            note: try c.decodeIfPresent(String.self, forKey: .note) ?? ""
+            note: try c.decodeIfPresent(String.self, forKey: .note) ?? "",
+            isIncludedInExport: try c.decodeIfPresent(Bool.self, forKey: .isIncludedInExport) ?? true
         )
     }
 }
@@ -258,7 +261,7 @@ struct AppState: Codable {
                 automaticAddresses = fullAddresses
             }
         }
-        return automaticAddresses.union(manualEnabled ? Set(manual.map(\.address)) : [])
+        return automaticAddresses.union(manualEnabled ? Set(manual.filter(\.isIncludedInExport).map(\.address)) : [])
     }
     var exportReady: Bool {
         if let catalog {

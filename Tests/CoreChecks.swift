@@ -32,7 +32,8 @@ func allowedIPv4Routes(in config: String) -> [IPv4Network] {
 @main struct CoreTests {
     static func main() async throws {
         let tests = CoreTests()
-        tests.testIPv4AndCIDR(); tests.testIPv4NetworkSetOperations(); tests.testIPv4NetworkReferenceOracle(); tests.testAllowedIPsFormattingDeduplicatesExistingCoverage(); try tests.testAmneziaWGParsePreservesUnchangedBytes(); try tests.testAmneziaWGPreservesAllowedIPSuffixesAndOpaqueValues(); try tests.testAmneziaWGOperationsNormalizeRoutes(); try tests.testAmneziaWGRejectsUnsafeConfigurationsWithoutLeakingKeys(); try tests.testAmneziaWGRejectsEmptyBypass(); try tests.testPrivateConfigurationPermissions(); try tests.testAmneziaWGLargeRouteRegression(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testProfileSaveReturnsCreatedOrUpdatedID(); tests.testCatalogDefaults(); tests.testManualGroups(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
+        tests.testIPv4AndCIDR(); tests.testIPv4NetworkSetOperations(); tests.testIPv4NetworkReferenceOracle(); tests.testAllowedIPsFormattingDeduplicatesExistingCoverage(); try tests.testAmneziaWGParsePreservesUnchangedBytes(); try tests.testAmneziaWGPreservesAllowedIPSuffixesAndOpaqueValues(); try tests.testAmneziaWGOperationsNormalizeRoutes(); try tests.testAmneziaWGRejectsUnsafeConfigurationsWithoutLeakingKeys(); try tests.testAmneziaWGRejectsEmptyBypass(); try tests.testPrivateConfigurationPermissions(); try tests.testAmneziaWGLargeRouteRegression(); try tests.testImportAndExport(); tests.testSelectionAndDeduplication(); tests.testRules(); try tests.testMigration(); try tests.testModesAndProfiles(); tests.testProfileSaveReturnsCreatedOrUpdatedID(); tests.testCatalogDefaults(); tests.testManualGroups(); tests.testPerManualExportSelection(); try await tests.testNetworkFailures(); try await tests.testLiveCatalog()
+        tests.testExportTargetSafety()
         print("All checks passed")
     }
     func testIPv4AndCIDR() {
@@ -326,6 +327,25 @@ func allowedIPv4Routes(in config: String) -> [IPv4Network] {
         let roundtrip = try! JSONDecoder().decode(AppState.self, from: JSONEncoder().encode(state))
         XCTAssertEqual(roundtrip.manual, state.manual)
         XCTAssertEqual(roundtrip.manualGroups, state.manualGroups)
+    }
+    func testPerManualExportSelection() {
+        var state = AppState()
+        let included = ManualEntry(address: "203.0.113.10")
+        let excluded = ManualEntry(address: "203.0.113.11", isIncludedInExport: false)
+        state.manual = [included, excluded]
+        XCTAssertEqual(state.exportRoutes(for: .targeted), ["203.0.113.10"])
+        let roundtrip = try! JSONDecoder().decode(AppState.self, from: JSONEncoder().encode(state))
+        XCTAssertTrue(!roundtrip.manual.first(where: { $0.id == excluded.id })!.isIncludedInExport)
+    }
+    func testExportTargetSafety() {
+        let small: Set<String> = ["192.0.2.7"]
+        XCTAssertEqual(try! validatedRoutes(small, for: .windows).count, 1)
+        let large = Set((0..<501).map { "10.\($0 / 256).\($0 % 256).0/32" })
+        XCTAssertThrows(try validatedRoutes(large, for: .windows)) { ($0 as? ExportValidationError) == .tooManyRoutes(target: .windows, count: 501, limit: 500) }
+        XCTAssertThrows(try validatedRoutes(["not-an-ip"], for: .macOS)) { ($0 as? ExportValidationError) == .invalidRoute("not-an-ip") }
+        XCTAssertTrue(exportSafetySummary(routeCount: 301, target: .windows).level == .elevated)
+        XCTAssertTrue(exportSafetySummary(routeCount: 501, target: .windows).level == .blocked)
+        XCTAssertTrue(exportSafetySummary(routeCount: 5001, target: .macOS).level == .warning)
     }
     func testNetworkFailures() async throws {
         let config = URLSessionConfiguration.ephemeral

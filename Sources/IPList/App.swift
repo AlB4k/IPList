@@ -181,6 +181,7 @@ struct ConfigurationWriteResult: Identifiable {
 }
 
 @MainActor final class Store: ObservableObject {
+    @Published var updateStatus: AppUpdateStatus?
     @Published var state = AppState()
     @Published var busy = false
     @Published var testingSources = false
@@ -343,6 +344,18 @@ struct ConfigurationWriteResult: Identifiable {
         guard let index = state.manual.firstIndex(where: { $0.id == id }) else { return }
         state.manual[index].note = note; persist()
     }
+    func setManualIncluded(id: UUID, _ included: Bool) {
+        guard let index = state.manual.firstIndex(where: { $0.id == id }), state.manual[index].isIncludedInExport != included else { return }
+        let before = state.export
+        state.manual[index].isIncludedInExport = included
+        record(before: before, reason: included ? "Включён мой IP в выгрузку" : "Исключён мой IP из выгрузки")
+        persist()
+    }
+    func checkForAppUpdates() {
+        Task {
+            updateStatus = await AppUpdateChecker.check(currentVersion: "1.4.1")
+        }
+    }
     func setManualGroup(id: UUID, groupID: UUID?) {
         guard let index = state.manual.firstIndex(where: { $0.id == id }) else { return }
         state.manual[index].groupID = groupID; persist()
@@ -415,12 +428,20 @@ struct ConfigurationWriteResult: Identifiable {
     }
     func exportFile() {
         guard exportReady else { error = "Сначала загрузите данные выбранного режима кнопкой «Проверить сейчас»."; return }
-        let panel = NSSavePanel(); panel.nameFieldStringValue = "amnezia-\(state.mode.rawValue).json"; panel.allowedContentTypes = [.json]
+        do { _ = try validatedRoutes(state.export, for: uiExportTarget) } catch { self.error = error.localizedDescription; return }
+        let panel = NSSavePanel(); panel.nameFieldStringValue = "amnezia-\(state.mode.rawValue)\(uiExportTarget.fileSuffix).json"; panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try exportData(state.export).write(to: url, options: .atomic); message = "Экспортировано \(state.export.count) адресов в \(url.lastPathComponent)." } catch { self.error = error.localizedDescription }
+        do { try exportData(state.export).write(to: url, options: .atomic); message = "Экспортировано \(state.export.count) адресов для \(uiExportTarget.rawValue) в \(url.lastPathComponent)." } catch { self.error = error.localizedDescription }
     }
+    @Published var uiExportTarget: ExportTarget = .macOS
     var allowedIPsSummary: AllowedIPsExportSummary? {
         allowedIPsExportSummary(state.export)
+    }
+    var exportSafety: ExportSafetySummary {
+        let summary = exportSafetySummary(routeCount: (try? validatedRoutes(state.export, for: uiExportTarget).count) ?? state.export.count, target: uiExportTarget)
+        return ExportSafetySummary(catalogCount: state.export.count - state.manual.filter(\.isIncludedInExport).count,
+                                   remainderCount: 0, manualCount: state.manual.filter(\.isIncludedInExport).count,
+                                   routeCount: summary.routeCount, level: summary.level, message: summary.message)
     }
     func copyAllowedIPs() {
         guard let summary = allowedIPsSummary else {
@@ -730,6 +751,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $ui.showImport) { importSheet }
         .sheet(isPresented: $ui.showConfigurationSheet) { configurationSheet }
+        .preferredColorScheme(.light)
         .onChange(of: ui.page) { page in if page == "Изменения" { store.markChangesSeen() } }
         .toolbar {
             ToolbarItem(placement: .navigation) {
@@ -955,6 +977,9 @@ struct ContentView: View {
 
     private func manualRow(_ entry: ManualEntry) -> some View {
         HStack {
+            Toggle("", isOn: Binding(get: { entry.isIncludedInExport }, set: { store.setManualIncluded(id: entry.id, $0) }))
+                .labelsHidden()
+                .help("Включать этот адрес в выгрузку")
             Text(entry.address).font(.system(.body, design: .monospaced)).frame(minWidth: 180, alignment: .leading)
             TextField("Примечание", text: Binding(get: { entry.note }, set: { store.updateManualNote(id: entry.id, note: $0) }))
                 .textFieldStyle(.roundedBorder)
@@ -983,6 +1008,16 @@ struct ContentView: View {
     private var preview: some View {
         VStack(alignment: .leading, spacing: 12) {
             modePicker
+            Picker("Назначение файла", selection: $store.uiExportTarget) {
+                ForEach(ExportTarget.allCases) { target in Text(target.rawValue).tag(target) }
+            }.pickerStyle(.segmented)
+            HStack {
+                Text("Будет выгружено: \(store.exportSafety.routeCount) маршрутов")
+                    .font(.headline).foregroundStyle(safetyColor(store.exportSafety.level))
+                Spacer()
+                Text(store.exportSafety.message).font(.caption).foregroundStyle(safetyColor(store.exportSafety.level))
+            }
+            Text("Каталог и прочие источники: \(store.exportSafety.catalogCount) · «Мои IP»: \(store.exportSafety.manualCount)").font(.caption).foregroundStyle(.secondary)
             Toggle("Включать «Мои IP» в выгружаемый файл", isOn: Binding(get: { store.state.manualEnabled }, set: { store.setManualEnabled($0) }))
             Text(store.state.mode.detail)
             Text("В AmneziaVPN выберите режим «Адреса из списка НЕ должны использовать VPN», затем импортируйте JSON.").font(.caption).foregroundStyle(.secondary)
@@ -996,6 +1031,10 @@ struct ContentView: View {
             }
             HStack { Text("Адресов: \(store.state.export.count)").foregroundStyle(.secondary); Spacer(); Button("Открыть папку автоматической выгрузки") { NSWorkspace.shared.open(store.folder) } }
         }
+    }
+
+    private func safetyColor(_ level: ExportSafetyLevel) -> Color {
+        switch level { case .safe: return Color(red: 0.05, green: 0.38, blue: 0.16); case .elevated: return .yellow; case .warning: return .orange; case .blocked: return .red }
     }
 
     private func owners(of ip: String) -> String {
@@ -1097,6 +1136,19 @@ struct ContentView: View {
                 Link("Категории v2fly/domain-list-community", destination: URL(string: "https://github.com/v2fly/domain-list-community")!)
             }
             Section("Проверка источников") { sourceChecksView }
+            Section("Обновление IPList") {
+                Button("Проверить обновления") { store.checkForAppUpdates() }
+                switch store.updateStatus {
+                case .none: Text("Проверка ещё не запускалась.").font(.caption).foregroundStyle(.secondary)
+                case .upToDate: Text("Установлена последняя версия.").font(.caption).foregroundStyle(.green)
+                case let .updateAvailable(version, url):
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Доступна версия \(version).").foregroundStyle(.orange)
+                        Link("Открыть релиз на GitHub", destination: url)
+                    }
+                case let .failed(message): Text(message).font(.caption).foregroundStyle(.red)
+                }
+            }
         }.formStyle(.grouped)
     }
 
